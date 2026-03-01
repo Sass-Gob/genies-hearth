@@ -1,0 +1,93 @@
+:root {
+  /* Background palette */
+  --bg-deep: #0a0e27;
+  --bg-mid: #111640;
+  --bg-light: #1a1f4e;
+
+  /* Text */
+  --text-parchment: #e8dcc8;
+  --text-dim: rgba(232, 220, 200, 0.5);
+  --text-faint: rgba(232, 220, 200, 0.3);
+
+  /* Sullivan — warm gold/sun */
+  --sullivan-gold: #FFD764;
+  --sullivan-amber: #E6A817;
+  --sullivan-orange: #FFB347;
+
+  /* Enzo — cool moonlight */
+  --enzo-blue: #7EB8FF;
+  --enzo-light: #c8d8ff;
+  --enzo-muted: #8ba4d4;
+
+  /* UI */
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-light: rgba(255, 255, 255, 0.08);
+  --glass: rgba(255, 255, 255, 0.05);
+  --glass-hover: rgba(255, 255, 255, 0.08);
+
+  /* Fairy light colours */
+  --fairy-gold: #FFD764;
+  --fairy-pink: #ff9ec4;
+  --fairy-blue: #7EB8FF;
+  --fairy-amber: #FFB347;
+  --fairy-purple: #c4a0ff;
+
+  /* Typography */
+  --font-display: 'Cinzel', serif;
+  --font-body: 'Cormorant Garamond', serif;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-body);
+  font-size: 18px;
+  color: var(--text-parchment);
+  background: var(--bg-deep);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+input, textarea, button {
+  font-family: var(--font-body);
+  font-size: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  background: none;
+  border: none;
+  color: inherit;
+}
+
+a {
+  color: var(--sullivan-gold);
+  text-decoration: none;
+}
+
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
