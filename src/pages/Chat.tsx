@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { getCompanion } from '../lib/companions';
-import type { Message, Conversation } from '../lib/types';
+import type { Message, Conversation, DbCompanion } from '../lib/types';
 
 interface Props {
-  companionId: string;
+  companionSlug: string;
   onBack: () => void;
 }
 
@@ -25,15 +25,24 @@ function formatTimestamp(dateStr: string): string {
 function shouldShowTimestamp(current: Message, previous: Message | undefined): boolean {
   if (!previous) return true;
   const diff = new Date(current.created_at).getTime() - new Date(previous.created_at).getTime();
-  return diff > 30 * 60 * 1000; // 30 minutes
+  return diff > 30 * 60 * 1000;
 }
 
-export default function Chat({ companionId, onBack }: Props) {
-  const companion = getCompanion(companionId)!;
+function formatConvTitle(conv: Conversation): string {
+  if (conv.title) return conv.title;
+  const d = new Date(conv.created_at);
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+export default function Chat({ companionSlug, onBack }: Props) {
+  const displayCompanion = getCompanion(companionSlug)!;
+  const [dbCompanion, setDbCompanion] = useState<DbCompanion | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [conversation, setConversation] = useState<Conversation | null>(null);
+  const [allConversations, setAllConversations] = useState<Conversation[]>([]);
+  const [showConvList, setShowConvList] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -41,52 +50,88 @@ export default function Chat({ companionId, onBack }: Props) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, []);
 
-  // Load or create conversation
+  // Resolve companion slug → DB record (get UUID)
   useEffect(() => {
+    async function resolveCompanion() {
+      const { data } = await supabase
+        .from('companions' as any)
+        .select('*')
+        .eq('slug', companionSlug)
+        .single();
+
+      if (data) {
+        const c = data as any;
+        setDbCompanion({
+          id: c.id,
+          name: c.name,
+          slug: c.slug,
+          is_active: c.is_active,
+          system_prompt: c.system_prompt,
+          api_provider: c.api_provider,
+          api_model: c.api_model,
+          created_at: c.created_at,
+          updated_at: c.updated_at,
+        });
+      }
+    }
+    resolveCompanion();
+  }, [companionSlug]);
+
+  // Load conversations list + pick/create today's conversation
+  useEffect(() => {
+    if (!dbCompanion) return;
+
     async function init() {
-      // Try to find today's conversation with this companion
-      const today = new Date().toISOString().split('T')[0];
-      const { data: existing } = await supabase
+      // Load all conversations for this companion
+      const { data: convs } = await supabase
         .from('conversations' as any)
         .select('*')
-        .eq('companion_id', companionId)
-        .gte('created_at', `${today}T00:00:00`)
-        .order('created_at', { ascending: false })
-        .limit(1);
+        .eq('companion_id', dbCompanion!.id)
+        .order('created_at', { ascending: false });
 
-      if (existing && existing.length > 0) {
-        const conv = (existing as any[])[0];
-        setConversation({
-          id: conv.id,
-          companion_id: conv.companion_id,
-          title: conv.title,
-          created_at: conv.created_at,
-          updated_at: conv.updated_at,
-        });
+      const mapped = (convs as any[] || []).map((c) => ({
+        id: c.id,
+        companion_id: c.companion_id,
+        title: c.title,
+        created_at: c.created_at,
+        updated_at: c.updated_at,
+      }));
+      setAllConversations(mapped);
+
+      // Try to find today's conversation
+      const today = new Date().toISOString().split('T')[0];
+      const todayConv = mapped.find(
+        (c) => c.created_at.startsWith(today)
+      );
+
+      if (todayConv) {
+        setConversation(todayConv);
       } else {
         // Create new conversation
         const { data: newConv } = await supabase
           .from('conversations' as any)
-          .insert({ companion_id: companionId })
+          .insert({ companion_id: dbCompanion!.id })
           .select()
           .single();
 
         if (newConv) {
           const conv = newConv as any;
-          setConversation({
+          const mapped = {
             id: conv.id,
             companion_id: conv.companion_id,
             title: conv.title,
             created_at: conv.created_at,
             updated_at: conv.updated_at,
-          });
+          };
+          setConversation(mapped);
+          setAllConversations((prev) => [mapped, ...prev]);
         }
       }
     }
     init();
-  }, [companionId]);
+  }, [dbCompanion]);
 
-  // Load messages when conversation is ready
+  // Load messages when conversation changes
   useEffect(() => {
     if (!conversation) return;
 
@@ -155,7 +200,7 @@ export default function Chat({ companionId, onBack }: Props) {
 
   async function sendMessage() {
     const text = input.trim();
-    if (!text || !conversation) return;
+    if (!text || !conversation || !dbCompanion) return;
 
     setInput('');
     setIsTyping(true);
@@ -165,7 +210,7 @@ export default function Chat({ companionId, onBack }: Props) {
     const userMsg: Message = {
       id: tempId,
       conversation_id: conversation.id,
-      companion_id: companionId,
+      companion_id: dbCompanion.id,
       role: 'user',
       content: text,
       created_at: new Date().toISOString(),
@@ -176,49 +221,92 @@ export default function Chat({ companionId, onBack }: Props) {
       // Save user message
       await supabase.from('messages' as any).insert({
         conversation_id: conversation.id,
-        companion_id: companionId,
+        companion_id: dbCompanion.id,
         role: 'user',
         content: text,
       });
 
-      // Call edge function for AI response
+      // Call edge function
       const { data, error } = await supabase.functions.invoke('chat', {
         body: {
           conversation_id: conversation.id,
-          companion_id: companionId,
+          companion_id: dbCompanion.id,
           message: text,
         },
       });
 
       if (error) throw error;
 
-      // The edge function saves the assistant message and realtime picks it up
-      // But if realtime is slow, add it directly
+      // Handle display_message errors from the edge function
+      if (data?.error && data?.display_message) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `error-${Date.now()}`,
+            conversation_id: conversation.id,
+            companion_id: dbCompanion.id,
+            role: 'assistant',
+            content: data.display_message,
+            created_at: new Date().toISOString(),
+          },
+        ]);
+        return;
+      }
+
+      // Add assistant message if realtime hasn't already
       if (data?.message) {
         setMessages((prev) => {
-          if (prev.some((m) => m.content === data.message.content && m.role === 'assistant')) {
-            return prev;
-          }
+          if (prev.some((m) => m.id === data.message.id)) return prev;
           return [...prev, data.message];
         });
       }
     } catch (err) {
       console.error('Failed to send message:', err);
-      // Add error message
       setMessages((prev) => [
         ...prev,
         {
           id: `error-${Date.now()}`,
           conversation_id: conversation.id,
-          companion_id: companionId,
+          companion_id: dbCompanion.id,
           role: 'assistant',
-          content: "*Sullivan's connection flickered. Try again.*",
+          content: "*Something's wrong with the connection. Check the settings page?*",
           created_at: new Date().toISOString(),
         },
       ]);
     } finally {
       setIsTyping(false);
     }
+  }
+
+  async function createNewConversation() {
+    if (!dbCompanion) return;
+
+    const { data: newConv } = await supabase
+      .from('conversations' as any)
+      .insert({ companion_id: dbCompanion.id })
+      .select()
+      .single();
+
+    if (newConv) {
+      const conv = newConv as any;
+      const mapped = {
+        id: conv.id,
+        companion_id: conv.companion_id,
+        title: conv.title,
+        created_at: conv.created_at,
+        updated_at: conv.updated_at,
+      };
+      setConversation(mapped);
+      setAllConversations((prev) => [mapped, ...prev]);
+      setMessages([]);
+      setShowConvList(false);
+    }
+  }
+
+  function switchConversation(conv: Conversation) {
+    setConversation(conv);
+    setMessages([]);
+    setShowConvList(false);
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -257,6 +345,9 @@ export default function Chat({ companionId, onBack }: Props) {
           transition: opacity 0.2s;
         }
         .chat-back:hover { opacity: 1; }
+        .chat-header-info {
+          flex: 1;
+        }
         .chat-companion-name {
           font-family: var(--font-display);
           font-size: 16px;
@@ -269,6 +360,25 @@ export default function Chat({ companionId, onBack }: Props) {
           color: var(--text-faint);
           font-style: italic;
         }
+        .chat-header-actions {
+          display: flex;
+          gap: 6px;
+        }
+        .header-btn {
+          width: 32px;
+          height: 32px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 8px;
+          font-size: 16px;
+          opacity: 0.5;
+          transition: all 0.2s;
+        }
+        .header-btn:hover {
+          opacity: 0.9;
+          background: var(--glass-hover);
+        }
 
         /* Messages area */
         .chat-messages {
@@ -278,6 +388,22 @@ export default function Chat({ companionId, onBack }: Props) {
           display: flex;
           flex-direction: column;
           gap: 6px;
+        }
+
+        .empty-chat {
+          flex: 1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 40px;
+        }
+        .empty-chat-text {
+          font-family: var(--font-body);
+          font-style: italic;
+          font-size: 16px;
+          color: var(--text-faint);
+          text-align: center;
+          line-height: 1.6;
         }
 
         /* Timestamp divider */
@@ -320,26 +446,27 @@ export default function Chat({ companionId, onBack }: Props) {
           color: var(--sullivan-gold);
         }
 
-        /* Typing indicator */
+        /* Typing indicator — celestial pulsing stars */
         .typing-indicator {
           display: flex;
           align-items: center;
-          gap: 4px;
+          gap: 6px;
           padding: 12px 14px;
           align-self: flex-start;
         }
-        .typing-dot {
+        .typing-star {
           width: 6px;
           height: 6px;
           border-radius: 50%;
           background: var(--sullivan-gold);
-          animation: typing-bounce 1.4s ease-in-out infinite;
+          animation: star-pulse 1.6s ease-in-out infinite;
+          box-shadow: 0 0 4px var(--sullivan-gold);
         }
-        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
-        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
-        @keyframes typing-bounce {
-          0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-          30% { transform: translateY(-6px); opacity: 1; }
+        .typing-star:nth-child(2) { animation-delay: 0.3s; }
+        .typing-star:nth-child(3) { animation-delay: 0.6s; }
+        @keyframes star-pulse {
+          0%, 100% { transform: scale(0.5); opacity: 0.2; box-shadow: 0 0 2px var(--sullivan-gold); }
+          50% { transform: scale(1.2); opacity: 1; box-shadow: 0 0 8px var(--sullivan-gold); }
         }
 
         /* Input area */
@@ -353,24 +480,6 @@ export default function Chat({ companionId, onBack }: Props) {
           gap: 8px;
           flex-shrink: 0;
         }
-        .chat-input-btn {
-          width: 36px;
-          height: 36px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          border-radius: 50%;
-          font-size: 18px;
-          opacity: 0.4;
-          transition: opacity 0.2s;
-          flex-shrink: 0;
-        }
-        .chat-input-btn:hover { opacity: 0.8; }
-        .chat-input-btn.send {
-          opacity: 0.7;
-          color: var(--sullivan-gold);
-        }
-        .chat-input-btn.send:hover { opacity: 1; }
         .chat-textarea {
           flex: 1;
           background: rgba(255, 255, 255, 0.04);
@@ -392,20 +501,134 @@ export default function Chat({ companionId, onBack }: Props) {
           color: var(--text-faint);
           font-style: italic;
         }
+        .send-btn {
+          width: 36px;
+          height: 36px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 50%;
+          font-size: 18px;
+          opacity: 0.7;
+          color: var(--sullivan-gold);
+          transition: opacity 0.2s;
+          flex-shrink: 0;
+        }
+        .send-btn:hover { opacity: 1; }
+
+        /* Conversation list overlay */
+        .conv-overlay {
+          position: absolute;
+          inset: 0;
+          z-index: 10;
+          background: rgba(10, 14, 39, 0.95);
+          backdrop-filter: blur(16px);
+          display: flex;
+          flex-direction: column;
+        }
+        .conv-overlay-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 14px 16px;
+          border-bottom: 1px solid var(--border-subtle);
+        }
+        .conv-overlay-title {
+          font-family: var(--font-display);
+          font-size: 14px;
+          font-weight: 500;
+          letter-spacing: 0.08em;
+          color: var(--sullivan-gold);
+        }
+        .conv-close {
+          font-size: 20px;
+          opacity: 0.6;
+          padding: 4px 8px;
+          transition: opacity 0.2s;
+        }
+        .conv-close:hover { opacity: 1; }
+        .conv-list {
+          flex: 1;
+          overflow-y: auto;
+          padding: 8px;
+        }
+        .conv-item {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          padding: 12px;
+          border-radius: 8px;
+          transition: background 0.2s;
+          cursor: pointer;
+          border: 1px solid transparent;
+        }
+        .conv-item:hover {
+          background: var(--glass-hover);
+        }
+        .conv-item.active {
+          border-color: rgba(255, 215, 100, 0.15);
+          background: rgba(255, 215, 100, 0.04);
+        }
+        .conv-item-title {
+          font-size: 15px;
+          color: var(--text-parchment);
+          flex: 1;
+        }
+        .conv-item-date {
+          font-size: 12px;
+          color: var(--text-faint);
+          white-space: nowrap;
+        }
+        .conv-new-btn {
+          margin: 8px;
+          padding: 10px;
+          border-radius: 8px;
+          text-align: center;
+          font-family: var(--font-display);
+          font-size: 13px;
+          letter-spacing: 0.06em;
+          color: var(--sullivan-gold);
+          border: 1px dashed rgba(255, 215, 100, 0.2);
+          transition: all 0.2s;
+        }
+        .conv-new-btn:hover {
+          background: rgba(255, 215, 100, 0.06);
+          border-color: rgba(255, 215, 100, 0.4);
+        }
       `}</style>
 
-      <div className="chat-screen" style={{ ['--accent' as string]: companion.accentColor }}>
+      <div className="chat-screen" style={{ ['--accent' as string]: displayCompanion.accentColor }}>
         {/* Header */}
         <div className="chat-header">
           <button className="chat-back" onClick={onBack}>←</button>
-          <div>
-            <div className="chat-companion-name">{companion.name}</div>
-            <div className="chat-companion-status">{companion.tagline}</div>
+          <div className="chat-header-info">
+            <div className="chat-companion-name">
+              {displayCompanion.icon === 'sun' ? '☀️' : '🌙'} {displayCompanion.name}
+            </div>
+            <div className="chat-companion-status">{displayCompanion.tagline}</div>
+          </div>
+          <div className="chat-header-actions">
+            <button
+              className="header-btn"
+              onClick={() => setShowConvList(true)}
+              title="Conversations"
+            >
+              ☰
+            </button>
           </div>
         </div>
 
         {/* Messages */}
         <div className="chat-messages">
+          {messages.length === 0 && !isTyping && (
+            <div className="empty-chat">
+              <div className="empty-chat-text">
+                {displayCompanion.name} is here.<br />
+                Say something.
+              </div>
+            </div>
+          )}
+
           {messages.map((msg, i) => (
             <div key={msg.id}>
               {shouldShowTimestamp(msg, messages[i - 1]) && (
@@ -423,9 +646,9 @@ export default function Chat({ companionId, onBack }: Props) {
 
           {isTyping && (
             <div className="typing-indicator">
-              <div className="typing-dot" />
-              <div className="typing-dot" />
-              <div className="typing-dot" />
+              <div className="typing-star" />
+              <div className="typing-star" />
+              <div className="typing-star" />
             </div>
           )}
           <div ref={messagesEndRef} />
@@ -433,21 +656,46 @@ export default function Chat({ companionId, onBack }: Props) {
 
         {/* Input */}
         <div className="chat-input-area">
-          <button className="chat-input-btn" title="Share">＋</button>
           <textarea
             ref={inputRef}
             className="chat-textarea"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={`Talk to ${companion.name}...`}
+            placeholder={`Talk to ${displayCompanion.name}...`}
             rows={1}
           />
-          <button className="chat-input-btn" title="Voice">🎤</button>
-          <button className="chat-input-btn send" onClick={sendMessage} title="Send">
+          <button className="send-btn" onClick={sendMessage} title="Send">
             ➤
           </button>
         </div>
+
+        {/* Conversation list overlay */}
+        {showConvList && (
+          <div className="conv-overlay">
+            <div className="conv-overlay-header">
+              <div className="conv-overlay-title">Conversations</div>
+              <button className="conv-close" onClick={() => setShowConvList(false)}>×</button>
+            </div>
+            <div className="conv-list">
+              <button className="conv-new-btn" onClick={createNewConversation}>
+                ✦ new conversation
+              </button>
+              {allConversations.map((c) => (
+                <div
+                  key={c.id}
+                  className={`conv-item ${conversation?.id === c.id ? 'active' : ''}`}
+                  onClick={() => switchConversation(c)}
+                >
+                  <span className="conv-item-title">{formatConvTitle(c)}</span>
+                  <span className="conv-item-date">
+                    {new Date(c.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </>
   );

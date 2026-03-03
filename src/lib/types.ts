@@ -1,5 +1,6 @@
+// Client-side companion display data
 export interface Companion {
-  id: string;
+  id: string;           // slug: 'sullivan', 'enzo'
   name: string;
   tagline: string;
   icon: 'sun' | 'moon';
@@ -7,12 +8,24 @@ export interface Companion {
   accentGlow: string;
   status: 'online' | 'away' | 'offline';
   active: boolean;
-  systemPrompt: string;
+}
+
+// Database companion row (from companions table)
+export interface DbCompanion {
+  id: string;           // uuid
+  name: string;
+  slug: string;
+  is_active: boolean;
+  system_prompt: string;
+  api_provider: string;
+  api_model: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Conversation {
   id: string;
-  companion_id: string;
+  companion_id: string; // uuid FK → companions
   title: string | null;
   created_at: string;
   updated_at: string;
@@ -21,8 +34,17 @@ export interface Conversation {
 export interface Message {
   id: string;
   conversation_id: string;
-  companion_id: string;
-  role: 'user' | 'assistant';
+  companion_id: string; // uuid FK → companions
+  role: 'user' | 'assistant' | 'system';
   content: string;
   created_at: string;
+}
+
+export interface ApiKeyInfo {
+  id: string;
+  provider: string;
+  masked_key: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
 }

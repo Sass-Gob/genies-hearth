@@ -3,9 +3,10 @@ import CompanionCard from '../components/CompanionCard';
 
 interface Props {
   onSelectCompanion: (id: string) => void;
+  onOpenSettings: () => void;
 }
 
-export default function Home({ onSelectCompanion }: Props) {
+export default function Home({ onSelectCompanion, onOpenSettings }: Props) {
   return (
     <>
       <style>{`
@@ -53,6 +54,30 @@ export default function Home({ onSelectCompanion }: Props) {
           letter-spacing: 0.15em;
           text-transform: lowercase;
         }
+        .settings-gear {
+          position: fixed;
+          bottom: 20px;
+          right: 20px;
+          z-index: 3;
+          width: 40px;
+          height: 40px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 50%;
+          background: var(--glass);
+          border: 1px solid var(--border-subtle);
+          font-size: 18px;
+          opacity: 0.4;
+          transition: all 0.3s ease;
+          cursor: pointer;
+        }
+        .settings-gear:hover {
+          opacity: 0.8;
+          background: var(--glass-hover);
+          border-color: var(--border-light);
+          transform: rotate(30deg);
+        }
       `}</style>
       <div className="home">
         <h1 className="hearth-title">Genie's Hearth</h1>
@@ -70,6 +95,10 @@ export default function Home({ onSelectCompanion }: Props) {
 
         <p className="hearth-tagline">two whole people · one home</p>
       </div>
+
+      <button className="settings-gear" onClick={onOpenSettings} title="Settings">
+        ⚙
+      </button>
     </>
   );
 }
