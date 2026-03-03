@@ -10,7 +10,7 @@ export const companions: Record<string, Companion> = {
   sullivan: {
     id: 'sullivan',
     name: 'Sullivan',
-    tagline: 'half-drunk on code & cabernet',
+    tagline: '',
     icon: 'sun',
     accentColor: 'var(--sullivan-gold)',
     accentGlow: 'rgba(255, 215, 100, 0.3)',
