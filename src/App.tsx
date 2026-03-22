@@ -3,6 +3,8 @@ import StarField from './components/StarField';
 import FairyLights from './components/FairyLights';
 import Moon from './components/Moon';
 import NebulaBg from './components/NebulaBg';
+import RainEffect from './components/RainEffect';
+import WisteriaVines from './components/WisteriaVines';
 import Home from './pages/Home';
 import Chat from './pages/Chat';
 import Settings from './pages/Settings';
@@ -25,9 +27,12 @@ export default function App() {
 
   return (
     <>
+      {/* Layer order: nebula → stars → rain → moon → wisteria → fairy lights → UI */}
       <NebulaBg />
       <StarField />
+      <RainEffect />
       <Moon />
+      <WisteriaVines dense={view !== 'chat'} />
       <FairyLights />
 
       {view === 'chat' && activeCompanion ? (

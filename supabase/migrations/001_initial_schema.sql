@@ -2,6 +2,9 @@
 -- Companion ID on every table from day one.
 -- Sullivan's data is Sullivan's. Enzo's is Enzo's.
 
+-- Enable vector extension for future memory embeddings
+create extension if not exists vector with schema extensions;
+
 -- Conversations
 create table if not exists conversations (
   id uuid default gen_random_uuid() primary key,
@@ -32,7 +35,7 @@ create table if not exists memories (
   id uuid default gen_random_uuid() primary key,
   companion_id text not null,
   content text not null,
-  embedding vector(1536),
+  embedding extensions.vector(1536),
   importance float default 0.5,
   created_at timestamptz default now() not null
 );
