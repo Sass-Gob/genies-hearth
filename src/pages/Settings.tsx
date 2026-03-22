@@ -16,7 +16,7 @@ const PROVIDERS = [
 export default function Settings({ onBack }: Props) {
   const [keys, setKeys] = useState<ApiKeyInfo[]>([]);
   const [companions, setCompanions] = useState<DbCompanion[]>([]);
-  const [selectedProvider, setSelectedProvider] = useState('anthropic');
+  const [selectedProvider, setSelectedProvider] = useState('xai');
   const [keyInput, setKeyInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState<string | null>(null);
