@@ -68,7 +68,7 @@ export default function Home({ onSelectCompanion, onOpenSettings }: Props) {
           background: var(--glass);
           border: 1px solid var(--border-subtle);
           font-size: 18px;
-          opacity: 0.4;
+          opacity: 0.7;
           transition: all 0.3s ease;
           cursor: pointer;
         }
