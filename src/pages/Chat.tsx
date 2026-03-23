@@ -603,9 +603,8 @@ export default function Chat({ companionSlug, onBack }: Props) {
           <button className="chat-back" onClick={onBack}>←</button>
           <div className="chat-header-info">
             <div className="chat-companion-name">
-              {displayCompanion.icon === 'sun' ? '☀️' : '🌙'} {displayCompanion.name}
+              {displayCompanion.name}
             </div>
-            <div className="chat-companion-status">{displayCompanion.tagline}</div>
           </div>
           <div className="chat-header-actions">
             <button
