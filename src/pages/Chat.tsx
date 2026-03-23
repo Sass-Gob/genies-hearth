@@ -603,8 +603,9 @@ export default function Chat({ companionSlug, onBack }: Props) {
           <button className="chat-back" onClick={onBack}>←</button>
           <div className="chat-header-info">
             <div className="chat-companion-name">
-              {displayCompanion.name}
+              {displayCompanion.icon === 'sun' ? '☀️' : '🌙'} {displayCompanion.name}
             </div>
+            <div className="chat-companion-status">{displayCompanion.tagline}</div>
           </div>
           <div className="chat-header-actions">
             <button
@@ -661,7 +662,7 @@ export default function Chat({ companionSlug, onBack }: Props) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={`Talk to ${displayCompanion.name}...`}
+            placeholder={displayCompanion.name}
             rows={1}
           />
           <button className="send-btn" onClick={sendMessage} title="Send">
