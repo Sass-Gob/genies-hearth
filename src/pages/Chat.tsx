@@ -200,7 +200,13 @@ export default function Chat({ companionSlug, onBack }: Props) {
 
   async function sendMessage() {
     const text = input.trim();
-    if (!text || !conversation || !dbCompanion) return;
+    console.log('sendMessage → dbCompanion:', dbCompanion);
+    console.log('sendMessage → conversation:', conversation);
+    console.log('sendMessage → text:', text);
+    if (!text || !conversation || !dbCompanion) {
+      console.log('sendMessage → BAILED: missing', !text ? 'text' : '', !conversation ? 'conversation' : '', !dbCompanion ? 'dbCompanion' : '');
+      return;
+    }
 
     setInput('');
     setIsTyping(true);
