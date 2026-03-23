@@ -488,6 +488,8 @@ export default function Chat({ companionSlug, onBack }: Props) {
         }
         .chat-textarea {
           flex: 1;
+          min-width: 0;
+          box-sizing: border-box;
           background: rgba(255, 255, 255, 0.04);
           border: 1px solid var(--border-subtle);
           border-radius: 20px;
