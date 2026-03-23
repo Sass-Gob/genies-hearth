@@ -22,6 +22,15 @@ function formatTimestamp(dateStr: string): string {
   return `✦ ${timeOfDay} · ${displayHour}:${minutes} ${period} ✦`;
 }
 
+function formatMessageTime(dateStr: string): string {
+  const date = new Date(dateStr);
+  const hours = date.getHours();
+  const minutes = date.getMinutes().toString().padStart(2, '0');
+  const period = hours < 12 ? 'am' : 'pm';
+  const displayHour = hours % 12 || 12;
+  return `${displayHour}:${minutes} ${period}`;
+}
+
 function shouldShowTimestamp(current: Message, previous: Message | undefined): boolean {
   if (!previous) return true;
   const diff = new Date(current.created_at).getTime() - new Date(previous.created_at).getTime();
@@ -451,6 +460,17 @@ export default function Chat({ companionSlug, onBack }: Props) {
           border-radius: 16px 4px 16px 16px;
           color: var(--sullivan-gold);
         }
+        .message-time {
+          font-size: 11px;
+          color: var(--text-faint);
+          opacity: 0.6;
+          margin-top: 2px;
+          font-family: var(--font-body);
+          letter-spacing: 0.02em;
+        }
+        .message-row.user .message-time {
+          text-align: right;
+        }
 
         /* Typing indicator — celestial pulsing stars */
         .typing-indicator {
@@ -645,8 +665,11 @@ export default function Chat({ companionSlug, onBack }: Props) {
                 </div>
               )}
               <div className={`message-row ${msg.role}`}>
-                <div className={`message-bubble ${msg.role}`}>
-                  {msg.content}
+                <div>
+                  <div className={`message-bubble ${msg.role}`}>
+                    {msg.content}
+                  </div>
+                  <div className="message-time">{formatMessageTime(msg.created_at)}</div>
                 </div>
               </div>
             </div>
