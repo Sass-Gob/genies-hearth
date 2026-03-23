@@ -141,8 +141,7 @@ export default function Settings({ onBack }: Props) {
 
   async function removeKey(provider: string) {
     try {
-      const { error } = await supabase.functions.invoke('api-keys', {
-        method: 'DELETE',
+      const { error } = await supabase.functions.invoke('api-keys?action=delete', {
         body: { provider },
       });
       if (error) throw error;

@@ -155,6 +155,26 @@ Deno.serve(async (req) => {
     if (req.method === "POST") {
       const body = await req.json();
 
+      // Delete action
+      if (action === "delete") {
+        const { provider } = body;
+        if (!provider) {
+          return new Response(
+            JSON.stringify({ error: "Missing provider" }),
+            {
+              status: 400,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            }
+          );
+        }
+
+        await supabase.from("api_keys").delete().eq("provider", provider);
+
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       // Test action
       if (action === "test") {
         const { provider, api_key } = body;
