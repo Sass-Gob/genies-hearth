@@ -651,8 +651,7 @@ export default function Chat({ companionSlug, onBack }: Props) {
           {messages.length === 0 && !isTyping && (
             <div className="empty-chat">
               <div className="empty-chat-text">
-                {displayCompanion.name} is here.<br />
-                Say something.
+                {displayCompanion.greeting || `${displayCompanion.name} is here.\nSay something.`}
               </div>
             </div>
           )}

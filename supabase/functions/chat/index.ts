@@ -30,6 +30,66 @@ async function decryptKey(encryptedStr: string): Promise<string> {
   return new TextDecoder().decode(decrypted);
 }
 
+// ── Gemini embedding helper ─────────────────────────────────────────
+async function getGeminiEmbedding(
+  apiKey: string,
+  text: string
+): Promise<number[]> {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "models/gemini-embedding-001",
+        content: { parts: [{ text }] },
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const err = await response.text();
+    console.error("Gemini embedding error:", response.status, err);
+    throw new Error(`Gemini embedding error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.embedding?.values || [];
+}
+
+// ── Memory retrieval ────────────────────────────────────────────────
+async function retrieveMemories(
+  supabase: ReturnType<typeof createClient>,
+  companionSlug: string,
+  message: string,
+  googleApiKey: string
+): Promise<string[]> {
+  try {
+    const embedding = await getGeminiEmbedding(googleApiKey, message);
+    if (!embedding.length) return [];
+
+    const { data, error } = await supabase.rpc("match_memories", {
+      query_embedding: JSON.stringify(embedding),
+      match_companion_id: companionSlug,
+      match_threshold: 0.3,
+      match_count: 12,
+    });
+
+    if (error) {
+      console.error("Memory retrieval error:", error);
+      return [];
+    }
+
+    return (data || []).map(
+      (m: { content: string; similarity: number; importance: number }) =>
+        m.content
+    );
+  } catch (e) {
+    console.error("Memory retrieval failed:", e);
+    return [];
+  }
+}
+
 // ── Provider API callers ────────────────────────────────────────────
 
 interface ChatMessage {
@@ -104,7 +164,7 @@ async function callOpenAI(
   if (!response.ok) {
     const err = await response.text();
     console.error("OpenAI-compatible API error:", response.status, err);
-    throw new Error(`OpenAI API error: ${response.status}`);
+    throw new Error(`OpenAI API error: ${response.status} — ${err.slice(0, 200)}`);
   }
 
   const data = await response.json();
@@ -193,37 +253,42 @@ Deno.serve(async (req) => {
       );
     }
 
-    const { system_prompt, api_provider, api_model } = companion;
+    const { system_prompt, api_provider, api_model, slug: companionSlug } = companion;
 
-    // ── Get API key ──
-    // First try encrypted key from DB, then fall back to env var
-    let apiKey: string | null = null;
+    // ── Get API keys ──
+    // Load all active keys so we can use Google for embeddings regardless of chat provider
+    const apiKeys: Record<string, string> = {};
 
-    const { data: keyRow } = await supabase
+    const { data: allKeys } = await supabase
       .from("api_keys")
-      .select("encrypted_key, is_active")
-      .eq("provider", api_provider)
-      .eq("is_active", true)
-      .single();
+      .select("provider, encrypted_key")
+      .eq("is_active", true);
 
-    if (keyRow?.encrypted_key) {
-      try {
-        apiKey = await decryptKey(keyRow.encrypted_key);
-      } catch (e) {
-        console.error("Failed to decrypt API key:", e);
+    if (allKeys) {
+      for (const row of allKeys) {
+        try {
+          apiKeys[row.provider] = await decryptKey(row.encrypted_key);
+        } catch (e) {
+          console.error(`Failed to decrypt ${row.provider} key:`, e);
+        }
       }
     }
 
-    // Env var fallback by provider
-    if (!apiKey) {
-      const envVarMap: Record<string, string> = {
-        anthropic: "ANTHROPIC_API_KEY",
-        openai: "OPENAI_API_KEY",
-        xai: "XAI_API_KEY",
-        google: "GOOGLE_API_KEY",
-      };
-      apiKey = Deno.env.get(envVarMap[api_provider] || "") || null;
+    // Env var fallbacks
+    const envVarMap: Record<string, string> = {
+      anthropic: "ANTHROPIC_API_KEY",
+      openai: "OPENAI_API_KEY",
+      xai: "XAI_API_KEY",
+      google: "GOOGLE_API_KEY",
+    };
+    for (const [provider, envVar] of Object.entries(envVarMap)) {
+      if (!apiKeys[provider]) {
+        const val = Deno.env.get(envVar);
+        if (val) apiKeys[provider] = val;
+      }
     }
+
+    const apiKey = apiKeys[api_provider] || null;
 
     if (!apiKey) {
       return new Response(
@@ -238,6 +303,28 @@ Deno.serve(async (req) => {
         }
       );
     }
+
+    // ── Retrieve relevant memories ──
+    let memoriesContext = "";
+    const googleKey = apiKeys["google"] || null;
+    if (googleKey) {
+      const memories = await retrieveMemories(
+        supabase,
+        companionSlug,
+        message,
+        googleKey
+      );
+      if (memories.length > 0) {
+        memoriesContext =
+          "\n\n## Relevant Memories\nThese are memories from our shared history. Reference them naturally when relevant — don't list them, weave them in:\n" +
+          memories.map((m) => `- ${m}`).join("\n");
+      }
+      console.log(`Retrieved ${memories.length} memories for context`);
+    } else {
+      console.log("No Google API key available — skipping memory retrieval");
+    }
+
+    const enrichedSystemPrompt = system_prompt + memoriesContext;
 
     // ── Load recent message history ──
     const { data: recentMessages } = await supabase
@@ -258,6 +345,7 @@ Deno.serve(async (req) => {
     chatHistory.push({ role: "user", content: message });
 
     // ── Call the appropriate provider ──
+    console.log(`Calling ${api_provider} with model ${api_model}, key starts with: ${apiKey.slice(0, 6)}...`);
     let assistantContent: string;
 
     switch (api_provider) {
@@ -265,7 +353,7 @@ Deno.serve(async (req) => {
         assistantContent = await callAnthropic(
           apiKey,
           api_model,
-          system_prompt,
+          enrichedSystemPrompt,
           chatHistory
         );
         break;
@@ -274,7 +362,7 @@ Deno.serve(async (req) => {
         assistantContent = await callOpenAI(
           apiKey,
           api_model,
-          system_prompt,
+          enrichedSystemPrompt,
           chatHistory,
           "https://api.openai.com/v1"
         );
@@ -284,7 +372,7 @@ Deno.serve(async (req) => {
         assistantContent = await callOpenAI(
           apiKey,
           api_model,
-          system_prompt,
+          enrichedSystemPrompt,
           chatHistory,
           "https://api.x.ai/v1"
         );
@@ -294,7 +382,7 @@ Deno.serve(async (req) => {
         assistantContent = await callGoogle(
           apiKey,
           api_model,
-          system_prompt,
+          enrichedSystemPrompt,
           chatHistory
         );
         break;
@@ -319,10 +407,12 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
-    console.error("Chat error:", error);
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error("Chat error:", errMsg);
     return new Response(
       JSON.stringify({
         error: "internal_error",
+        debug: errMsg,
         display_message:
           "*Something's wrong with the connection. Check the settings page?*",
       }),

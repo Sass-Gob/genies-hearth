@@ -3,6 +3,7 @@ export interface Companion {
   id: string;           // slug: 'sullivan', 'enzo'
   name: string;
   tagline: string;
+  greeting: string;
   icon: 'sun' | 'moon';
   accentColor: string;
   accentGlow: string;
