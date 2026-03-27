@@ -218,6 +218,7 @@ export default function Chat({ companionSlug, onBack }: Props) {
     }
 
     setInput('');
+    if (inputRef.current) inputRef.current.style.height = 'auto';
     setIsTyping(true);
 
     // Optimistically add user message
@@ -510,7 +511,8 @@ export default function Chat({ companionSlug, onBack }: Props) {
           border-radius: 20px;
           padding: 8px 16px;
           resize: none;
-          max-height: 120px;
+          max-height: 200px;
+          overflow-y: auto;
           min-height: 36px;
           line-height: 1.4;
           font-size: 16px;
@@ -685,7 +687,12 @@ export default function Chat({ companionSlug, onBack }: Props) {
             ref={inputRef}
             className="chat-textarea"
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              setInput(e.target.value);
+              const el = e.target;
+              el.style.height = 'auto';
+              el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+            }}
             placeholder={displayCompanion.name}
             rows={1}
           />
