@@ -324,12 +324,7 @@ export default function Chat({ companionSlug, onBack }: Props) {
     setShowConvList(false);
   }
 
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  }
+  // No key-based send — the only way to send is the send button
 
   return (
     <>
@@ -691,7 +686,6 @@ export default function Chat({ companionSlug, onBack }: Props) {
             className="chat-textarea"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
             placeholder={displayCompanion.name}
             rows={1}
           />
