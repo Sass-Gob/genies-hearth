@@ -53,6 +53,11 @@ export default function Chat({ companionSlug, onBack }: Props) {
   const [allConversations, setAllConversations] = useState<Conversation[]>([]);
   const [showConvList, setShowConvList] = useState(false);
   const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null);
+  const [convMenuId, setConvMenuId] = useState<string | null>(null);
+  const [confirmDeleteConvId, setConfirmDeleteConvId] = useState<string | null>(null);
+  const [confirmDeleteMsgId, setConfirmDeleteMsgId] = useState<string | null>(null);
+  const [msgContextMenu, setMsgContextMenu] = useState<{ msgId: string; x: number; y: number } | null>(null);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -384,6 +389,70 @@ export default function Chat({ companionSlug, onBack }: Props) {
     setMessages([]);
     setShowConvList(false);
   }
+
+  async function deleteConversation(convId: string) {
+    // Delete all messages first, then the conversation
+    await supabase.from('messages' as any).delete().eq('conversation_id', convId);
+    await supabase.from('conversations' as any).delete().eq('id', convId);
+
+    const remaining = allConversations.filter((c) => c.id !== convId);
+    setAllConversations(remaining);
+    setConfirmDeleteConvId(null);
+    setConvMenuId(null);
+
+    if (conversation?.id === convId) {
+      if (remaining.length > 0) {
+        switchConversation(remaining[0]);
+      } else {
+        setConversation(null);
+        setMessages([]);
+        setShowConvList(false);
+      }
+    }
+  }
+
+  async function deleteMessage(msgId: string) {
+    await supabase.from('messages' as any).delete().eq('id', msgId);
+    setMessages((prev) => prev.filter((m) => m.id !== msgId));
+    setConfirmDeleteMsgId(null);
+    setMsgContextMenu(null);
+  }
+
+  function handleMsgContextMenu(e: React.MouseEvent, msgId: string) {
+    if (msgId.startsWith('temp-') || msgId.startsWith('error-')) return;
+    e.preventDefault();
+    setMsgContextMenu({ msgId, x: e.clientX, y: e.clientY });
+  }
+
+  function handleMsgTouchStart(msgId: string) {
+    if (msgId.startsWith('temp-') || msgId.startsWith('error-')) return;
+    longPressTimer.current = setTimeout(() => {
+      setMsgContextMenu({ msgId, x: 0, y: 0 }); // centered on mobile
+    }, 500);
+  }
+
+  function handleMsgTouchEnd() {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  }
+
+  // Close context menu on outside tap
+  useEffect(() => {
+    if (!msgContextMenu) return;
+    const handler = () => setMsgContextMenu(null);
+    const timer = setTimeout(() => document.addEventListener('click', handler), 0);
+    return () => { clearTimeout(timer); document.removeEventListener('click', handler); };
+  }, [msgContextMenu]);
+
+  // Close conv menu on outside tap
+  useEffect(() => {
+    if (!convMenuId) return;
+    const handler = () => setConvMenuId(null);
+    const timer = setTimeout(() => document.addEventListener('click', handler), 0);
+    return () => { clearTimeout(timer); document.removeEventListener('click', handler); };
+  }, [convMenuId]);
 
   // Close emoji picker on outside tap
   useEffect(() => {
@@ -774,6 +843,163 @@ export default function Chat({ companionSlug, onBack }: Props) {
           background: rgba(255, 215, 100, 0.06);
           border-color: rgba(255, 215, 100, 0.4);
         }
+
+        /* Three-dot menu on conversation items */
+        .conv-item-row {
+          display: flex;
+          align-items: center;
+          gap: 0;
+          width: 100%;
+        }
+        .conv-item-content {
+          flex: 1;
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          min-width: 0;
+          cursor: pointer;
+        }
+        .conv-menu-btn {
+          width: 28px;
+          height: 28px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 6px;
+          font-size: 16px;
+          color: var(--text-faint);
+          opacity: 1;
+          transition: opacity 0.2s, background 0.2s;
+          flex-shrink: 0;
+        }
+        @media (hover: hover) {
+          .conv-menu-btn {
+            opacity: 0;
+          }
+          .conv-item:hover .conv-menu-btn {
+            opacity: 0.6;
+          }
+        }
+        .conv-menu-btn:hover {
+          opacity: 1 !important;
+          background: var(--glass-hover);
+        }
+        .conv-dropdown {
+          position: absolute;
+          right: 16px;
+          margin-top: 4px;
+          background: rgba(20, 24, 50, 0.98);
+          border: 1px solid var(--border-subtle);
+          border-radius: 8px;
+          padding: 4px;
+          z-index: 20;
+          min-width: 160px;
+          box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+        }
+        .conv-dropdown-item {
+          width: 100%;
+          text-align: left;
+          padding: 8px 12px;
+          border-radius: 6px;
+          font-size: 14px;
+          color: #f87171;
+          transition: background 0.15s;
+          cursor: pointer;
+        }
+        .conv-dropdown-item:hover {
+          background: rgba(248, 113, 113, 0.1);
+        }
+
+        /* Message context menu */
+        .msg-context-menu {
+          position: fixed;
+          background: rgba(20, 24, 50, 0.98);
+          border: 1px solid var(--border-subtle);
+          border-radius: 8px;
+          padding: 4px;
+          z-index: 30;
+          min-width: 140px;
+          box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+        }
+        .msg-context-item {
+          width: 100%;
+          text-align: left;
+          padding: 8px 12px;
+          border-radius: 6px;
+          font-size: 14px;
+          color: #f87171;
+          transition: background 0.15s;
+          cursor: pointer;
+        }
+        .msg-context-item:hover {
+          background: rgba(248, 113, 113, 0.1);
+        }
+
+        /* Confirm dialog overlay */
+        .confirm-overlay {
+          position: fixed;
+          inset: 0;
+          z-index: 50;
+          background: rgba(0, 0, 0, 0.6);
+          backdrop-filter: blur(4px);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 16px;
+        }
+        .confirm-dialog {
+          background: rgba(20, 24, 50, 0.98);
+          border: 1px solid var(--border-subtle);
+          border-radius: 12px;
+          padding: 24px;
+          max-width: 320px;
+          width: 100%;
+          box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+        }
+        .confirm-title {
+          font-family: var(--font-display);
+          font-size: 16px;
+          font-weight: 500;
+          color: var(--text-parchment);
+          margin-bottom: 8px;
+        }
+        .confirm-body {
+          font-size: 14px;
+          color: var(--text-faint);
+          line-height: 1.5;
+          margin-bottom: 20px;
+        }
+        .confirm-actions {
+          display: flex;
+          gap: 8px;
+          justify-content: flex-end;
+        }
+        .confirm-cancel {
+          padding: 8px 16px;
+          border-radius: 8px;
+          font-size: 14px;
+          color: var(--text-parchment);
+          background: var(--glass);
+          border: 1px solid var(--border-subtle);
+          transition: background 0.15s;
+          cursor: pointer;
+        }
+        .confirm-cancel:hover {
+          background: var(--glass-hover);
+        }
+        .confirm-delete {
+          padding: 8px 16px;
+          border-radius: 8px;
+          font-size: 14px;
+          color: #fff;
+          background: #dc2626;
+          border: none;
+          transition: background 0.15s;
+          cursor: pointer;
+        }
+        .confirm-delete:hover {
+          background: #b91c1c;
+        }
       `}</style>
 
       <div className="chat-screen" style={{ ['--accent' as string]: displayCompanion.accentColor }}>
@@ -816,7 +1042,13 @@ export default function Chat({ companionSlug, onBack }: Props) {
               )}
               <div className={`message-row ${msg.role}`}>
                 <div className="message-col">
-                  <div className={`message-bubble ${msg.role}`}>
+                  <div
+                    className={`message-bubble ${msg.role}`}
+                    onContextMenu={(e) => handleMsgContextMenu(e, msg.id)}
+                    onTouchStart={() => handleMsgTouchStart(msg.id)}
+                    onTouchEnd={handleMsgTouchEnd}
+                    onTouchMove={handleMsgTouchEnd}
+                  >
                     {msg.content}
                   </div>
                   {/* Reactions display */}
@@ -911,18 +1143,95 @@ export default function Chat({ companionSlug, onBack }: Props) {
                 <div
                   key={c.id}
                   className={`conv-item ${conversation?.id === c.id ? 'active' : ''}`}
-                  onClick={() => switchConversation(c)}
+                  style={{ position: 'relative' }}
                 >
-                  <span className="conv-item-title">{formatConvTitle(c)}</span>
-                  <span className="conv-item-date">
-                    {new Date(c.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                  </span>
+                  <div className="conv-item-row">
+                    <div className="conv-item-content" onClick={() => switchConversation(c)}>
+                      <span className="conv-item-title">{formatConvTitle(c)}</span>
+                      <span className="conv-item-date">
+                        {new Date(c.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      </span>
+                    </div>
+                    <button
+                      className="conv-menu-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConvMenuId(convMenuId === c.id ? null : c.id);
+                      }}
+                    >
+                      ⋮
+                    </button>
+                  </div>
+                  {convMenuId === c.id && (
+                    <div className="conv-dropdown" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        className="conv-dropdown-item"
+                        onClick={() => {
+                          setConfirmDeleteConvId(c.id);
+                          setConvMenuId(null);
+                        }}
+                      >
+                        Delete conversation
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
           </div>
         )}
       </div>
+
+      {/* Message context menu (right-click / long-press) */}
+      {msgContextMenu && (
+        <div
+          className="msg-context-menu"
+          style={
+            msgContextMenu.x === 0
+              ? { top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }
+              : { top: msgContextMenu.y, left: Math.min(msgContextMenu.x, window.innerWidth - 160) }
+          }
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className="msg-context-item"
+            onClick={() => {
+              setConfirmDeleteMsgId(msgContextMenu.msgId);
+              setMsgContextMenu(null);
+            }}
+          >
+            Delete message
+          </button>
+        </div>
+      )}
+
+      {/* Confirm dialog: delete conversation */}
+      {confirmDeleteConvId && (
+        <div className="confirm-overlay" onClick={() => setConfirmDeleteConvId(null)}>
+          <div className="confirm-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="confirm-title">Delete conversation</div>
+            <div className="confirm-body">Delete this conversation? This can't be undone.</div>
+            <div className="confirm-actions">
+              <button className="confirm-cancel" onClick={() => setConfirmDeleteConvId(null)}>Cancel</button>
+              <button className="confirm-delete" onClick={() => deleteConversation(confirmDeleteConvId)}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm dialog: delete message */}
+      {confirmDeleteMsgId && (
+        <div className="confirm-overlay" onClick={() => setConfirmDeleteMsgId(null)}>
+          <div className="confirm-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="confirm-title">Delete message</div>
+            <div className="confirm-body">Delete this message? This can't be undone.</div>
+            <div className="confirm-actions">
+              <button className="confirm-cancel" onClick={() => setConfirmDeleteMsgId(null)}>Cancel</button>
+              <button className="confirm-delete" onClick={() => deleteMessage(confirmDeleteMsgId)}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
