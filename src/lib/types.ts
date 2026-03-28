@@ -32,12 +32,18 @@ export interface Conversation {
   updated_at: string;
 }
 
+export interface Reaction {
+  emoji: string;
+  by: 'user' | 'companion';
+}
+
 export interface Message {
   id: string;
   conversation_id: string;
   companion_id: string; // uuid FK → companions
   role: 'user' | 'assistant' | 'system';
   content: string;
+  reactions: Reaction[];
   created_at: string;
 }
 

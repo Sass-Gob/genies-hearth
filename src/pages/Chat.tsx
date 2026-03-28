@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { getCompanion } from '../lib/companions';
-import type { Message, Conversation, DbCompanion } from '../lib/types';
+import type { Message, Conversation, DbCompanion, Reaction } from '../lib/types';
 
 interface Props {
   companionSlug: string;
@@ -52,12 +52,49 @@ export default function Chat({ companionSlug, onBack }: Props) {
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [allConversations, setAllConversations] = useState<Conversation[]>([]);
   const [showConvList, setShowConvList] = useState(false);
+  const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  const companionEmoji: Record<string, string> = { sullivan: '🖤', enzo: '🌙' };
+  const baseEmojis = ['❤️', '🔥', '😂', '😢', '👀'];
+  const allEmojis = [...baseEmojis, companionEmoji[companionSlug] || '✨'];
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, []);
+
+  async function toggleReaction(messageId: string, emoji: string) {
+    const msg = messages.find((m) => m.id === messageId);
+    if (!msg) return;
+
+    const existing = msg.reactions || [];
+    const hasIt = existing.some((r) => r.emoji === emoji && r.by === 'user');
+    const updated: Reaction[] = hasIt
+      ? existing.filter((r) => !(r.emoji === emoji && r.by === 'user'))
+      : [...existing, { emoji, by: 'user' as const }];
+
+    // Optimistic update
+    setMessages((prev) =>
+      prev.map((m) => (m.id === messageId ? { ...m, reactions: updated } : m))
+    );
+    setReactionPickerMsgId(null);
+
+    // Persist to DB
+    await supabase
+      .from('messages' as any)
+      .update({ reactions: updated })
+      .eq('id', messageId);
+
+    // Feed companion_signals if adding (not removing)
+    if (!hasIt && dbCompanion) {
+      await supabase.from('companion_signals' as any).insert({
+        companion_id: dbCompanion.id,
+        signal_type: 'reaction',
+        payload: { emoji, message_id: messageId, message_role: msg.role },
+      });
+    }
+  }
 
   // Resolve companion slug → DB record (get UUID)
   useEffect(() => {
@@ -159,6 +196,7 @@ export default function Chat({ companionSlug, onBack }: Props) {
             companion_id: m.companion_id,
             role: m.role,
             content: m.content,
+            reactions: m.reactions || [],
             created_at: m.created_at,
           }))
         );
@@ -189,10 +227,28 @@ export default function Chat({ companionSlug, onBack }: Props) {
                 companion_id: m.companion_id,
                 role: m.role,
                 content: m.content,
+                reactions: m.reactions || [],
                 created_at: m.created_at,
               },
             ];
           });
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'messages',
+          filter: `conversation_id=eq.${conversation.id}`,
+        },
+        (payload) => {
+          const m = payload.new as any;
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === m.id ? { ...msg, reactions: m.reactions || [] } : msg
+            )
+          );
         }
       )
       .subscribe();
@@ -229,6 +285,7 @@ export default function Chat({ companionSlug, onBack }: Props) {
       companion_id: dbCompanion.id,
       role: 'user',
       content: text,
+      reactions: [],
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, userMsg]);
@@ -263,6 +320,7 @@ export default function Chat({ companionSlug, onBack }: Props) {
             companion_id: dbCompanion.id,
             role: 'assistant',
             content: data.display_message,
+            reactions: [],
             created_at: new Date().toISOString(),
           },
         ]);
@@ -271,9 +329,10 @@ export default function Chat({ companionSlug, onBack }: Props) {
 
       // Add assistant message if realtime hasn't already
       if (data?.message) {
+        const m = data.message;
         setMessages((prev) => {
-          if (prev.some((m) => m.id === data.message.id)) return prev;
-          return [...prev, data.message];
+          if (prev.some((msg) => msg.id === m.id)) return prev;
+          return [...prev, { ...m, reactions: m.reactions || [] }];
         });
       }
     } catch (err) {
@@ -286,6 +345,7 @@ export default function Chat({ companionSlug, onBack }: Props) {
           companion_id: dbCompanion.id,
           role: 'assistant',
           content: "*Something's wrong with the connection. Check the settings page?*",
+          reactions: [],
           created_at: new Date().toISOString(),
         },
       ]);
@@ -324,6 +384,14 @@ export default function Chat({ companionSlug, onBack }: Props) {
     setMessages([]);
     setShowConvList(false);
   }
+
+  // Close emoji picker on outside tap
+  useEffect(() => {
+    if (!reactionPickerMsgId) return;
+    const handler = () => setReactionPickerMsgId(null);
+    const timer = setTimeout(() => document.addEventListener('click', handler), 0);
+    return () => { clearTimeout(timer); document.removeEventListener('click', handler); };
+  }, [reactionPickerMsgId]);
 
   // No key-based send — the only way to send is the send button
 
@@ -464,8 +532,94 @@ export default function Chat({ companionSlug, onBack }: Props) {
           font-family: var(--font-body);
           letter-spacing: 0.02em;
         }
-        .message-row.user .message-time {
-          text-align: right;
+        .message-col {
+          display: flex;
+          flex-direction: column;
+          min-width: 0;
+        }
+        .message-meta {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          margin-top: 2px;
+        }
+        .message-meta.user {
+          justify-content: flex-end;
+        }
+        .react-btn {
+          width: 20px;
+          height: 20px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 50%;
+          font-size: 12px;
+          opacity: 0;
+          color: var(--text-faint);
+          transition: opacity 0.2s;
+        }
+        .message-row:hover .react-btn {
+          opacity: 0.5;
+        }
+        .react-btn:hover {
+          opacity: 1 !important;
+          background: var(--glass-hover);
+        }
+
+        /* Emoji picker */
+        .emoji-picker {
+          display: flex;
+          gap: 2px;
+          padding: 4px 6px;
+          background: rgba(20, 24, 50, 0.95);
+          border: 1px solid var(--border-subtle);
+          border-radius: 20px;
+          margin-top: 4px;
+          width: fit-content;
+        }
+        .emoji-picker.user {
+          align-self: flex-end;
+        }
+        .emoji-btn {
+          width: 32px;
+          height: 32px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 50%;
+          font-size: 18px;
+          transition: transform 0.15s, background 0.15s;
+        }
+        .emoji-btn:hover {
+          transform: scale(1.25);
+          background: var(--glass-hover);
+        }
+        .emoji-btn.active {
+          background: rgba(255, 215, 100, 0.15);
+        }
+
+        /* Reaction pills */
+        .reactions-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px;
+          margin-top: 4px;
+        }
+        .reactions-row.user {
+          justify-content: flex-end;
+        }
+        .reaction-pill {
+          font-size: 16px;
+          padding: 2px 6px;
+          border-radius: 12px;
+          background: rgba(255, 255, 255, 0.06);
+          cursor: default;
+        }
+        .reaction-pill.user {
+          cursor: pointer;
+        }
+        .reaction-pill.companion {
+          border: 1px solid rgba(255, 215, 100, 0.15);
         }
 
         /* Typing indicator — celestial pulsing stars */
@@ -661,11 +815,52 @@ export default function Chat({ companionSlug, onBack }: Props) {
                 </div>
               )}
               <div className={`message-row ${msg.role}`}>
-                <div>
+                <div className="message-col">
                   <div className={`message-bubble ${msg.role}`}>
                     {msg.content}
                   </div>
-                  <div className="message-time">{formatMessageTime(msg.created_at)}</div>
+                  {/* Reactions display */}
+                  {msg.reactions && msg.reactions.length > 0 && (
+                    <div className={`reactions-row ${msg.role}`}>
+                      {msg.reactions.map((r, ri) => (
+                        <span
+                          key={ri}
+                          className={`reaction-pill ${r.by}`}
+                          onClick={() => r.by === 'user' ? toggleReaction(msg.id, r.emoji) : undefined}
+                        >
+                          {r.emoji}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div className={`message-meta ${msg.role}`}>
+                    <span className="message-time">{formatMessageTime(msg.created_at)}</span>
+                    {!msg.id.startsWith('temp-') && !msg.id.startsWith('error-') && (
+                      <button
+                        className="react-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setReactionPickerMsgId(reactionPickerMsgId === msg.id ? null : msg.id);
+                        }}
+                      >
+                        +
+                      </button>
+                    )}
+                  </div>
+                  {/* Emoji picker */}
+                  {reactionPickerMsgId === msg.id && (
+                    <div className={`emoji-picker ${msg.role}`}>
+                      {allEmojis.map((emoji) => (
+                        <button
+                          key={emoji}
+                          className={`emoji-btn ${msg.reactions?.some((r) => r.emoji === emoji && r.by === 'user') ? 'active' : ''}`}
+                          onClick={() => toggleReaction(msg.id, emoji)}
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

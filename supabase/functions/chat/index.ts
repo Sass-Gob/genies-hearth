@@ -115,7 +115,6 @@ async function callAnthropic(
     },
     body: JSON.stringify({
       model,
-      max_tokens: 4000,
       system: systemPrompt,
       messages: filteredMessages.map((m) => ({
         role: m.role,
@@ -156,7 +155,6 @@ async function callOpenAI(
     },
     body: JSON.stringify({
       model,
-      max_tokens: 4000,
       messages: apiMessages,
     }),
   });
@@ -402,6 +400,46 @@ Deno.serve(async (req) => {
       })
       .select()
       .single();
+
+    // ── Companion auto-reaction (~20% chance) ──
+    if (Math.random() < 0.2) {
+      try {
+        // Find the user message we're replying to
+        const { data: userMsg } = await supabase
+          .from("messages")
+          .select("id, reactions")
+          .eq("conversation_id", conversation_id)
+          .eq("role", "user")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .single();
+
+        if (userMsg) {
+          const companionEmojis: Record<string, string> = {
+            sullivan: "🖤",
+            enzo: "🌙",
+          };
+          const reactionPool = ["❤️", "🔥", "😂", "😢", "👀", companionEmojis[companionSlug] || "✨"];
+          const emoji = reactionPool[Math.floor(Math.random() * reactionPool.length)];
+          const existing = userMsg.reactions || [];
+          const updated = [...existing, { emoji, by: "companion" }];
+
+          await supabase
+            .from("messages")
+            .update({ reactions: updated })
+            .eq("id", userMsg.id);
+
+          // Feed companion_signals
+          await supabase.from("companion_signals").insert({
+            companion_id,
+            signal_type: "reaction",
+            payload: { emoji, message_id: userMsg.id, direction: "companion_to_user" },
+          });
+        }
+      } catch (e) {
+        console.error("Auto-reaction failed (non-fatal):", e);
+      }
+    }
 
     return new Response(JSON.stringify({ message: savedMessage }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
