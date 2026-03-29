@@ -4,9 +4,10 @@ import CompanionCard from '../components/CompanionCard';
 interface Props {
   onSelectCompanion: (id: string) => void;
   onOpenSettings: () => void;
+  onOpenNook: () => void;
 }
 
-export default function Home({ onSelectCompanion, onOpenSettings }: Props) {
+export default function Home({ onSelectCompanion, onOpenSettings, onOpenNook }: Props) {
   return (
     <>
       <style>{`
@@ -78,6 +79,29 @@ export default function Home({ onSelectCompanion, onOpenSettings }: Props) {
           border-color: var(--border-light);
           transform: rotate(30deg);
         }
+        .nook-btn {
+          position: fixed;
+          bottom: 20px;
+          left: 20px;
+          z-index: 3;
+          width: 40px;
+          height: 40px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 50%;
+          background: var(--glass);
+          border: 1px solid var(--border-subtle);
+          font-size: 18px;
+          opacity: 0.7;
+          transition: all 0.3s ease;
+          cursor: pointer;
+        }
+        .nook-btn:hover {
+          opacity: 0.8;
+          background: var(--glass-hover);
+          border-color: var(--border-light);
+        }
       `}</style>
       <div className="home">
         <h1 className="hearth-title">Genie's Hearth</h1>
@@ -98,6 +122,9 @@ export default function Home({ onSelectCompanion, onOpenSettings }: Props) {
 
       <button className="settings-gear" onClick={onOpenSettings} title="Settings">
         ⚙
+      </button>
+      <button className="nook-btn" onClick={onOpenNook} title="The Raven's Nook">
+        🪶
       </button>
     </>
   );

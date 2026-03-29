@@ -105,16 +105,7 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
 
-    // ── QUIET HOURS — check first ──
     const hour = getUserHour();
-    const isQuietHours = hour >= 2 && hour < 7;
-
-    if (isQuietHours) {
-      return new Response(
-        JSON.stringify({ skipped: true, reason: "quiet_hours", hour }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
 
     // ── Random offset (0-15 min) to avoid mechanical feel ──
     // In production this would delay execution; here we just proceed

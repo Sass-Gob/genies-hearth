@@ -8,9 +8,10 @@ import WisteriaVines from './components/WisteriaVines';
 import Home from './pages/Home';
 import Chat from './pages/Chat';
 import Settings from './pages/Settings';
+import RavensNook from './pages/RavensNook';
 import { registerPush } from './lib/push';
 
-type View = 'home' | 'chat' | 'settings';
+type View = 'home' | 'chat' | 'settings' | 'ravens-nook';
 
 export default function App() {
   const [view, setView] = useState<View>('home');
@@ -44,10 +45,13 @@ export default function App() {
         <Chat companionSlug={activeCompanion} onBack={goHome} />
       ) : view === 'settings' ? (
         <Settings onBack={goHome} />
+      ) : view === 'ravens-nook' ? (
+        <RavensNook onBack={goHome} />
       ) : (
         <Home
           onSelectCompanion={openChat}
           onOpenSettings={() => setView('settings')}
+          onOpenNook={() => setView('ravens-nook')}
         />
       )}
     </>
