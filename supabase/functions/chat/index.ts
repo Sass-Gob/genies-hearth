@@ -138,7 +138,8 @@ async function callOpenAI(
   model: string,
   systemPrompt: string,
   messages: ChatMessage[],
-  baseUrl = "https://api.openai.com/v1"
+  baseUrl = "https://api.openai.com/v1",
+  maxTokens?: number,
 ): Promise<string> {
   const apiMessages = [
     { role: "system" as const, content: systemPrompt },
@@ -147,16 +148,16 @@ async function callOpenAI(
       .map((m) => ({ role: m.role, content: m.content })),
   ];
 
+  const body: Record<string, unknown> = { model, messages: apiMessages };
+  if (maxTokens) body.max_tokens = maxTokens;
+
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      model,
-      messages: apiMessages,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
@@ -322,7 +323,37 @@ Deno.serve(async (req) => {
       console.log("No Google API key available — skipping memory retrieval");
     }
 
-    const enrichedSystemPrompt = system_prompt + memoriesContext;
+    // ── Fetch recent autonomous messages for context ──
+    let autonomousContext = "";
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data: recentAuto } = await supabase
+      .from("autonomous_messages")
+      .select("content, created_at")
+      .eq("companion_id", companion_id)
+      .in("status", ["push_sent", "read"])
+      .gte("created_at", twentyFourHoursAgo)
+      .order("created_at", { ascending: false })
+      .limit(10);
+
+    if (recentAuto && recentAuto.length > 0) {
+      autonomousContext =
+        "\n\n--- RECENT MESSAGES YOU SENT ---\n" +
+        "These are messages you sent recently. They may be replying to one. Reference naturally.\n" +
+        recentAuto
+          .map((m: { content: string; created_at: string }) => {
+            const ago = Math.round(
+              (Date.now() - new Date(m.created_at).getTime()) / 60000
+            );
+            const timeLabel =
+              ago < 60 ? `${ago}m ago` : `${Math.round(ago / 60)}h ago`;
+            return `[${timeLabel}] ${m.content.slice(0, 300)}`;
+          })
+          .join("\n") +
+        "\n--- END ---";
+      console.log(`Injected ${recentAuto.length} autonomous messages as context`);
+    }
+
+    const enrichedSystemPrompt = system_prompt + memoriesContext + autonomousContext;
 
     // ── Load recent message history ──
     const { data: recentMessages } = await supabase
@@ -372,7 +403,8 @@ Deno.serve(async (req) => {
           api_model,
           enrichedSystemPrompt,
           chatHistory,
-          "https://api.x.ai/v1"
+          "https://api.x.ai/v1",
+          5000,
         );
         break;
 
