@@ -182,6 +182,19 @@ export default function Chat({ companionSlug, onBack }: Props) {
     init();
   }, [dbCompanion]);
 
+  // Mark autonomous messages as read when chat opens
+  useEffect(() => {
+    if (!dbCompanion) return;
+    supabase
+      .from('autonomous_messages' as any)
+      .update({ status: 'read', read_at: new Date().toISOString() })
+      .eq('companion_id', dbCompanion.id)
+      .in('status', ['pending', 'push_sent'])
+      .then(({ error }) => {
+        if (error) console.error('Failed to mark autonomous messages as read:', error);
+      });
+  }, [dbCompanion, conversation]);
+
   // Load messages when conversation changes
   useEffect(() => {
     if (!conversation) return;

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import StarField from './components/StarField';
 import FairyLights from './components/FairyLights';
 import Moon from './components/Moon';
@@ -8,12 +8,17 @@ import WisteriaVines from './components/WisteriaVines';
 import Home from './pages/Home';
 import Chat from './pages/Chat';
 import Settings from './pages/Settings';
+import { registerPush } from './lib/push';
 
 type View = 'home' | 'chat' | 'settings';
 
 export default function App() {
   const [view, setView] = useState<View>('home');
   const [activeCompanion, setActiveCompanion] = useState<string | null>(null);
+
+  useEffect(() => {
+    registerPush().catch(console.error);
+  }, []);
 
   function openChat(slug: string) {
     setActiveCompanion(slug);
