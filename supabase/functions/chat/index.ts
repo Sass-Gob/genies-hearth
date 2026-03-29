@@ -133,12 +133,11 @@ async function callAnthropic(
   return data.content?.[0]?.type === "text" ? data.content[0].text : "";
 }
 
-async function callOpenAI(
+async function callXai(
   apiKey: string,
   model: string,
   systemPrompt: string,
   messages: ChatMessage[],
-  baseUrl = "https://api.openai.com/v1",
   maxTokens?: number,
 ): Promise<string> {
   const apiMessages = [
@@ -151,7 +150,7 @@ async function callOpenAI(
   const body: Record<string, unknown> = { model, messages: apiMessages };
   if (maxTokens) body.max_tokens = maxTokens;
 
-  const response = await fetch(`${baseUrl}/chat/completions`, {
+  const response = await fetch("https://api.x.ai/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -162,8 +161,8 @@ async function callOpenAI(
 
   if (!response.ok) {
     const err = await response.text();
-    console.error("OpenAI-compatible API error:", response.status, err);
-    throw new Error(`OpenAI API error: ${response.status} — ${err.slice(0, 200)}`);
+    console.error("xAI API error:", response.status, err);
+    throw new Error(`xAI API error: ${response.status} — ${err.slice(0, 200)}`);
   }
 
   const data = await response.json();
@@ -276,7 +275,6 @@ Deno.serve(async (req) => {
     // Env var fallbacks
     const envVarMap: Record<string, string> = {
       anthropic: "ANTHROPIC_API_KEY",
-      openai: "OPENAI_API_KEY",
       xai: "XAI_API_KEY",
       google: "GOOGLE_API_KEY",
     };
@@ -387,23 +385,12 @@ Deno.serve(async (req) => {
         );
         break;
 
-      case "openai":
-        assistantContent = await callOpenAI(
-          apiKey,
-          api_model,
-          enrichedSystemPrompt,
-          chatHistory,
-          "https://api.openai.com/v1"
-        );
-        break;
-
       case "xai":
-        assistantContent = await callOpenAI(
+        assistantContent = await callXai(
           apiKey,
           api_model,
           enrichedSystemPrompt,
           chatHistory,
-          "https://api.x.ai/v1",
           5000,
         );
         break;
