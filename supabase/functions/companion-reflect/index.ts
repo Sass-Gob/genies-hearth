@@ -83,7 +83,7 @@ async function generateExplorationEntry(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "grok-4.1-fast",
+      model: "grok-4-1-fast",
       messages: [{ role: "user", content: queryPrompt }],
       max_tokens: 50,
     }),
@@ -106,7 +106,7 @@ async function generateExplorationEntry(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "grok-4.1-fast",
+        model: "grok-4-1-fast",
         tools: [{ type: "web_search" }],
         input: searchQuery,
       }),
@@ -166,7 +166,7 @@ Respond ONLY as JSON:
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "grok-4.1-fast",
+      model: "grok-4-1-fast",
       messages: [{ role: "user", content: writePrompt }],
       max_tokens: 1000,
       response_format: { type: "json_object" },
@@ -235,7 +235,7 @@ Respond ONLY as JSON:
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "grok-4.1-fast",
+      model: "grok-4-1-fast",
       messages: [{ role: "user", content: prompt }],
       max_tokens: 1000,
       response_format: { type: "json_object" },
@@ -302,7 +302,7 @@ Respond ONLY as JSON:
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "grok-4.1-fast",
+      model: "grok-4-1-fast",
       messages: [{ role: "user", content: prompt }],
       max_tokens: 1000,
       response_format: { type: "json_object" },
@@ -363,7 +363,7 @@ Respond ONLY as JSON:
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "grok-4.1-fast",
+      model: "grok-4-1-fast",
       messages: [{ role: "user", content: prompt }],
       max_tokens: 1000,
       response_format: { type: "json_object" },
@@ -642,7 +642,7 @@ Respond ONLY as JSON:
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "grok-3-fast",
+      model: "grok-4-1-fast",
       messages: [
         {
           role: "system",
@@ -796,7 +796,7 @@ Respond ONLY as JSON:
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "grok-4.1-fast",
+      model: "grok-4-1-fast",
       messages: [{ role: "user", content: prompt }],
       max_tokens: 300,
       response_format: { type: "json_object" },
@@ -904,7 +904,7 @@ Deno.serve(async (req) => {
     for (const companion of companions) {
       const { id: companionId, slug, name: companionName } = companion;
 
-      // xAI key required for all calls (grok-4.1-fast)
+      // xAI key required for all calls (grok-4-1-fast)
       const xaiKey = apiKeys["xai"];
       if (!xaiKey) {
         results.push({ companion: slug, status: "no_xai_key" });
