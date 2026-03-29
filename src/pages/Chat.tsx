@@ -309,7 +309,32 @@ export default function Chat({ companionSlug, onBack }: Props) {
         (payload) => {
           const m = payload.new as any;
           setMessages((prev) => {
+            // Already have this exact ID
             if (prev.some((msg) => msg.id === m.id)) return prev;
+
+            // For user messages, replace the optimistic temp message
+            if (m.role === 'user') {
+              const tempIdx = prev.findIndex(
+                (msg) => msg.id.startsWith('temp-') && msg.role === 'user' && msg.content === m.content
+              );
+              if (tempIdx !== -1) {
+                const updated = [...prev];
+                updated[tempIdx] = {
+                  id: m.id,
+                  conversation_id: m.conversation_id,
+                  companion_id: m.companion_id,
+                  role: m.role,
+                  content: m.content,
+                  reactions: m.reactions || [],
+                  media_type: prev[tempIdx].media_type,
+                  audio_data: prev[tempIdx].audio_data,
+                  duration: prev[tempIdx].duration,
+                  created_at: m.created_at,
+                };
+                return updated;
+              }
+            }
+
             return [
               ...prev,
               {
@@ -356,9 +381,7 @@ export default function Chat({ companionSlug, onBack }: Props) {
 
   async function sendMessage() {
     const text = input.trim();
-    console.log('sendMessage → dbCompanion:', dbCompanion);
-    console.log('sendMessage → conversation:', conversation);
-    console.log('sendMessage → text:', text);
+    if (isTyping) return; // prevent double send
     if (!text || !conversation || !dbCompanion) {
       console.log('sendMessage → BAILED: missing', !text ? 'text' : '', !conversation ? 'conversation' : '', !dbCompanion ? 'dbCompanion' : '');
       return;
@@ -446,7 +469,7 @@ export default function Chat({ companionSlug, onBack }: Props) {
   }
 
   async function sendVoiceMessage(transcript: string, audioData: string, duration: number) {
-    if (!conversation || !dbCompanion) return;
+    if (!conversation || !dbCompanion || isTyping) return;
 
     setIsTyping(true);
 
