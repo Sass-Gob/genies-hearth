@@ -9,6 +9,7 @@ export interface Companion {
   accentGlow: string;
   status: 'online' | 'away' | 'offline';
   active: boolean;
+  voiceId?: string;     // ElevenLabs voice ID (Phase 5)
 }
 
 // Database companion row (from companions table)

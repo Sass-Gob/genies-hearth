@@ -22,12 +22,47 @@ export default function Settings({ onBack }: Props) {
   const [testing, setTesting] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ provider: string; success: boolean } | null>(null);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [displayName, setDisplayName] = useState('');
+  const [timezone, setTimezone] = useState('Europe/London');
 
-  // Load stored keys and companions
+  // Load stored keys, companions, and user settings
   useEffect(() => {
     loadKeys();
     loadCompanions();
+    loadUserSettings();
   }, []);
+
+  async function loadUserSettings() {
+    const { data } = await supabase
+      .from('user_settings' as any)
+      .select('*')
+      .limit(1)
+      .single();
+    if (data) {
+      const s = data as any;
+      setDisplayName(s.display_name || '');
+      setTimezone(s.timezone || 'Europe/London');
+    }
+  }
+
+  async function saveUserSettings(field: string, value: string) {
+    const { data: existing } = await supabase
+      .from('user_settings' as any)
+      .select('id')
+      .limit(1)
+      .single();
+
+    if (existing) {
+      await supabase
+        .from('user_settings' as any)
+        .update({ [field]: value })
+        .eq('id', (existing as any).id);
+    } else {
+      await supabase
+        .from('user_settings' as any)
+        .insert({ [field]: value });
+    }
+  }
 
   async function loadKeys() {
     try {
@@ -467,6 +502,44 @@ export default function Settings({ onBack }: Props) {
               {message.text}
             </div>
           )}
+
+          {/* Profile Section */}
+          <div className="settings-section">
+            <div className="section-title">Profile</div>
+            <div className="section-desc">
+              How your companions know you.
+            </div>
+            <div className="key-form">
+              <label style={{ fontSize: '13px', color: 'var(--text-faint)', marginBottom: '-8px' }}>Display Name</label>
+              <input
+                className="key-input"
+                type="text"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                onBlur={() => saveUserSettings('display_name', displayName)}
+                placeholder="What should they call you?"
+              />
+              <label style={{ fontSize: '13px', color: 'var(--text-faint)', marginBottom: '-8px' }}>Timezone</label>
+              <select
+                className="key-select"
+                value={timezone}
+                onChange={(e) => {
+                  setTimezone(e.target.value);
+                  saveUserSettings('timezone', e.target.value);
+                }}
+              >
+                <option value="Europe/London">Europe/London (GMT/BST)</option>
+                <option value="Europe/Paris">Europe/Paris (CET)</option>
+                <option value="Europe/Berlin">Europe/Berlin (CET)</option>
+                <option value="America/New_York">America/New_York (EST)</option>
+                <option value="America/Chicago">America/Chicago (CST)</option>
+                <option value="America/Denver">America/Denver (MST)</option>
+                <option value="America/Los_Angeles">America/Los_Angeles (PST)</option>
+                <option value="Asia/Tokyo">Asia/Tokyo (JST)</option>
+                <option value="Australia/Sydney">Australia/Sydney (AEST)</option>
+              </select>
+            </div>
+          </div>
 
           {/* API Keys Section */}
           <div className="settings-section">

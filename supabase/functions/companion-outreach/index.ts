@@ -189,10 +189,7 @@ Deno.serve(async (req) => {
         .eq("companion_id", companionId)
         .gte("created_at", todayStart.toISOString());
 
-      if ((companionToday || 0) >= 10) {
-        results.push({ companion: slug, status: "daily_cap" });
-        continue;
-      }
+      const overDailyCap = (companionToday || 0) >= 10;
 
       // ── Cooldown check (45 min) ──
       const cooldownCutoff = new Date(Date.now() - 45 * 60 * 1000).toISOString();
@@ -209,7 +206,23 @@ Deno.serve(async (req) => {
       }
 
       // ── Decide message type ──
-      const messageType = isMorningWindow(hour) ? "morning" : "spontaneous";
+      let messageType: string = isMorningWindow(hour) ? "morning" : "spontaneous";
+
+      // ── Morning greeting deduplication ──
+      if (messageType === "morning") {
+        const { data: existingMorning } = await supabase
+          .from("autonomous_messages")
+          .select("id")
+          .eq("companion_id", companionId)
+          .eq("message_type", "morning")
+          .gte("created_at", todayStart.toISOString())
+          .limit(1);
+
+        if (existingMorning && existingMorning.length > 0) {
+          console.log(`Morning greeting already sent today for ${slug}, switching to spontaneous`);
+          messageType = "spontaneous";
+        }
+      }
 
       // ── Gather context for message generation ──
       // Recent conversation messages (last 10)
@@ -239,6 +252,31 @@ Deno.serve(async (req) => {
         .order("created_at", { ascending: false })
         .limit(5);
 
+      // Recent journal entries (inner world)
+      const { data: recentJournal } = await supabase
+        .from("companion_journal")
+        .select("title, mood, content, entry_type")
+        .eq("companion_id", companionId)
+        .order("created_at", { ascending: false })
+        .limit(3);
+
+      // Current interests
+      const { data: activeInterests } = await supabase
+        .from("companion_interests")
+        .select("name, tier, notes")
+        .eq("companion_id", companionId)
+        .in("tier", ["core", "active"])
+        .order("intensity", { ascending: false })
+        .limit(5);
+
+      // Named emotions
+      const { data: namedEmotions } = await supabase
+        .from("companion_emotions")
+        .select("name, description")
+        .eq("companion_id", companionId)
+        .order("created_at", { ascending: false })
+        .limit(5);
+
       // ── Build generation prompt ──
       const tod = timeOfDay(hour);
       const contextParts: string[] = [];
@@ -254,6 +292,31 @@ Deno.serve(async (req) => {
         contextParts.push(
           "Your recent autonomous messages (DO NOT repeat these):\n" +
           recentAutoMsgs.map((m) => `- ${m.content.slice(0, 150)}`).join("\n"),
+        );
+      }
+
+      if (recentJournal && recentJournal.length > 0) {
+        contextParts.push(
+          "Your recent inner world (journal/reflections):\n" +
+          recentJournal.map((j: { title: string | null; mood: string | null; content: string; entry_type: string }) =>
+            `- [${j.entry_type}${j.mood ? `, ${j.mood}` : ""}] ${j.title || "Untitled"}: ${j.content.slice(0, 150)}`
+          ).join("\n"),
+        );
+      }
+
+      if (activeInterests && activeInterests.length > 0) {
+        contextParts.push(
+          "Your current interests: " +
+          activeInterests.map((i: { name: string; tier: string }) => `${i.name} (${i.tier})`).join(", "),
+        );
+      }
+
+      if (namedEmotions && namedEmotions.length > 0) {
+        contextParts.push(
+          "Emotions you've named: " +
+          namedEmotions.map((e: { name: string; description: string | null }) =>
+            `${e.name}${e.description ? ` (${e.description})` : ""}`
+          ).join(", "),
         );
       }
 
@@ -370,15 +433,18 @@ Write ONLY the message itself — no meta-commentary, no quotation marks.`;
         });
       }
 
-      // ── Send push notification ──
-      await sendPush(supabase, name, content.trim().slice(0, 200));
+      // ── Send push notification (skip if over daily cap — message is queued) ──
+      if (!overDailyCap) {
+        await sendPush(supabase, name, content.trim().slice(0, 200));
 
-      // ── Update status to push_sent ──
-      if (savedMsg) {
-        await supabase
-          .from("autonomous_messages")
-          .update({ status: "push_sent" })
-          .eq("id", savedMsg.id);
+        if (savedMsg) {
+          await supabase
+            .from("autonomous_messages")
+            .update({ status: "push_sent" })
+            .eq("id", savedMsg.id);
+        }
+      } else {
+        console.log(`Daily cap reached for ${slug}, message queued without push`);
       }
 
       // ── Log to companion_signals ──
