@@ -1439,13 +1439,13 @@ export default function Chat({ companionSlug, onBack }: Props) {
               <div className={`message-row ${msg.role}`}>
                 <div className="message-col">
                   <div
-                    className={`message-bubble ${msg.role} ${(msg.media_type === 'voice' || (msg.role === 'assistant' && !msg.id.startsWith('error-'))) ? 'voice-note' : ''}`}
+                    className={`message-bubble ${msg.role} ${(msg.media_type === 'voice') ? 'voice-note' : ''}`}
                     onContextMenu={(e) => handleMsgContextMenu(e, msg.id)}
                     onTouchStart={() => handleMsgTouchStart(msg.id)}
                     onTouchEnd={handleMsgTouchEnd}
                     onTouchMove={handleMsgTouchEnd}
                   >
-                    {(msg.media_type === 'voice' || (msg.role === 'assistant' && !msg.id.startsWith('error-'))) ? (
+                    {(msg.media_type === 'voice') ? (
                       <VoiceNoteBubble msg={msg} speak={speak} stop={stop} speakingMsgId={speakingMsgId} />
                     ) : (
                       msg.content
@@ -1467,6 +1467,18 @@ export default function Chat({ companionSlug, onBack }: Props) {
                   )}
                   <div className={`message-meta ${msg.role}`}>
                     <span className="message-time">{formatMessageTime(msg.created_at)}</span>
+                    {msg.role === 'assistant' && !msg.id.startsWith('error-') && msg.media_type !== 'voice' && (
+                      <button
+                        className="react-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          speakingMsgId === msg.id ? stop() : speak(msg.content, msg.id);
+                        }}
+                        title={speakingMsgId === msg.id ? 'Stop' : 'Read aloud'}
+                      >
+                        {speakingMsgId === msg.id ? '⏹' : '🔊'}
+                      </button>
+                    )}
                     {!msg.id.startsWith('temp-') && !msg.id.startsWith('error-') && (
                       <button
                         className="react-btn"
