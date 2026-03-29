@@ -174,6 +174,14 @@ export default function Chat({ companionSlug, onBack }: Props) {
             created_at: conv.created_at,
             updated_at: conv.updated_at,
           };
+          // Insert greeting as first message
+          const greetingText = displayCompanion.greeting || `${displayCompanion.name} is here.\nSay something.`;
+          await supabase.from('messages' as any).insert({
+            conversation_id: conv.id,
+            companion_id: dbCompanion!.id,
+            role: 'assistant',
+            content: greetingText,
+          });
           setConversation(mapped);
           setAllConversations((prev) => [mapped, ...prev]);
         }
@@ -377,6 +385,14 @@ export default function Chat({ companionSlug, onBack }: Props) {
         created_at: conv.created_at,
         updated_at: conv.updated_at,
       };
+      // Insert greeting as first message
+      const greetingText = displayCompanion.greeting || `${displayCompanion.name} is here.\nSay something.`;
+      await supabase.from('messages' as any).insert({
+        conversation_id: conv.id,
+        companion_id: dbCompanion!.id,
+        role: 'assistant',
+        content: greetingText,
+      });
       setConversation(mapped);
       setAllConversations((prev) => [mapped, ...prev]);
       setMessages([]);
@@ -1025,10 +1041,10 @@ export default function Chat({ companionSlug, onBack }: Props) {
 
         {/* Messages */}
         <div className="chat-messages">
-          {messages.length === 0 && !isTyping && (
+          {messages.length === 0 && !isTyping && !conversation && (
             <div className="empty-chat">
               <div className="empty-chat-text">
-                {displayCompanion.greeting || `${displayCompanion.name} is here.\nSay something.`}
+                No conversations yet.
               </div>
             </div>
           )}
