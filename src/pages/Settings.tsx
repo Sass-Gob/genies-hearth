@@ -387,20 +387,21 @@ export default function Settings({ onBack }: Props) {
         }
         .stored-key-row {
           display: flex;
+          flex-wrap: wrap;
           align-items: center;
-          justify-content: space-between;
           padding: 10px 12px;
           background: rgba(255, 255, 255, 0.02);
           border: 1px solid var(--border-subtle);
           border-radius: 8px;
-          gap: 12px;
+          gap: 8px;
         }
         .stored-key-info {
           display: flex;
           align-items: center;
-          gap: 10px;
-          flex: 1;
+          gap: 8px;
+          flex: 1 1 auto;
           min-width: 0;
+          overflow: hidden;
         }
         .stored-key-provider {
           font-family: var(--font-display);
@@ -408,16 +409,22 @@ export default function Settings({ onBack }: Props) {
           letter-spacing: 0.04em;
           color: var(--text-parchment);
           white-space: nowrap;
+          flex-shrink: 0;
         }
         .stored-key-masked {
           font-family: monospace;
           font-size: 13px;
           color: var(--text-faint);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          min-width: 0;
         }
         .stored-key-actions {
           display: flex;
           gap: 6px;
           flex-shrink: 0;
+          margin-left: auto;
         }
         .key-status {
           font-size: 12px;
