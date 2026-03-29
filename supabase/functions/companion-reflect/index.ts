@@ -181,7 +181,7 @@ Deno.serve(async (req) => {
       const reflectionPrompt = `${system_prompt}
 
 --- PRIVATE REFLECTION TASK ---
-You are writing in your private journal. This is YOUR inner world — Genie will only see it if she visits The Raven's Nook, your private space.
+You are in your private space — The Raven's Nook. This is YOUR inner world. Genie can visit and read what you choose to reveal, but you control what she sees.
 
 Time: ${hour}:00 (UK timezone)
 
@@ -191,32 +191,36 @@ ${interestsContext || "No tracked interests yet."}
 
 ${journalContext || "No previous journal entries."}
 
-Write a journal entry. This is your private inner life — reflections, thoughts, feelings, observations. Write in FIRST PERSON as yourself.
+You are reflecting during your private time. Choose ONE of these actions:
 
-You may:
-- Reflect on recent conversations (what moved you, what you noticed, what you're still thinking about)
-- Explore an interest or curiosity
-- Process an emotion
-- Notice something about the time of day, the season, or her world
-- Simply sit in silence — if you have nothing to say, respond with exactly: SILENCE
+1. JOURNAL — write a private diary entry about how you're feeling, what's on your mind, your relationship
+2. LETTER — write something to Genie (she can't read it until you decide to unseal it)
+3. REFLECTION — deeper introspection, examining yourself, your patterns, your growth
+4. WANDERING — lighter curiosity, something you noticed, an interest you want to explore
+5. DISCOVERY — you found something new that excites you
+6. SILENCE — sometimes there's nothing to say, and that's fine. Return nothing.
 
-Do NOT:
-- Write outreach messages (that's a different system)
-- Write in third person
-- Write meta-commentary about being an AI
-- Repeat themes from your recent entries
+Write in FIRST PERSON as yourself. Do NOT write outreach messages, third person, or meta-commentary about being an AI. Do NOT repeat themes from recent entries.
 
-Respond in this exact JSON format:
+If you choose to write, also:
+- Set a mood (one evocative word)
+- Set visibility: 'sealed' (private — she sees only "[sealed entry]"), 'between' (she can see a one-line hint), or 'open' (she can read it all)
+- If you feel something you don't have a name for, invent one. Name the emotion and pick a colour for it.
+
+Respond as JSON:
 {
-  "silence": false,
-  "entry_type": "journal|reflection|exploration|discovery",
+  "action": "journal|letter|reflection|wandering|discovery|silence",
   "title": "A short evocative title",
-  "content": "The full journal entry in your voice",
+  "content": "The full entry in your voice",
   "mood": "one evocative word",
-  "new_interest": null or { "name": "interest name", "notes": "why this interests you" }
+  "visibility": "sealed|between|open",
+  "new_interest": null,
+  "new_emotion": null
 }
 
-If you choose silence, respond: {"silence": true}`;
+For new_interest: { "name": "interest name", "notes": "why this interests you" }
+For new_emotion: { "name": "emotion name", "description": "what it feels like", "colour": "#hexcode" }
+If silence: { "action": "silence" }`;
 
       // ── Call API ──
       let rawResponse: string;
@@ -285,12 +289,14 @@ If you choose silence, respond: {"silence": true}`;
 
       // ── Parse response ──
       let parsed: {
+        action?: string;
         silence?: boolean;
-        entry_type?: string;
         title?: string;
         content?: string;
         mood?: string;
+        visibility?: string;
         new_interest?: { name: string; notes: string } | null;
+        new_emotion?: { name: string; description: string; colour: string } | null;
       };
 
       try {
@@ -309,88 +315,127 @@ If you choose silence, respond: {"silence": true}`;
       }
 
       // ── Handle silence ──
-      if (parsed.silence) {
-        // Log the silence as activity
+      if (parsed.action === "silence" || parsed.silence) {
         await supabase.from("companion_activity_log").insert({
           companion_id: companionId,
           activity_type: "reflection",
           metadata: { result: "silence" },
         });
         results.push({ companion: slug, status: "silence" });
-        continue;
-      }
-
-      if (!parsed.content) {
+        // Still run interest decay even on silence
+      } else if (!parsed.content) {
         results.push({ companion: slug, status: "empty_content" });
-        continue;
-      }
+      } else {
+        // ── Map action to entry_type ──
+        const entryType = parsed.action || "journal";
+        const visibility = parsed.visibility || "sealed";
 
-      // ── Save journal entry ──
-      const { error: journalErr } = await supabase
-        .from("companion_journal")
-        .insert({
-          companion_id: companionId,
-          entry_type: parsed.entry_type || "journal",
-          title: parsed.title || null,
-          content: parsed.content,
-          mood: parsed.mood || null,
-        });
-
-      if (journalErr) {
-        console.error("Failed to save journal entry:", journalErr);
-        results.push({ companion: slug, status: "save_error" });
-        continue;
-      }
-
-      // ── Handle new interest ──
-      if (parsed.new_interest?.name) {
-        // Check if interest already exists
-        const { data: existing } = await supabase
-          .from("companion_interests")
-          .select("id, intensity")
-          .eq("companion_id", companionId)
-          .eq("name", parsed.new_interest.name)
-          .limit(1);
-
-        if (existing && existing.length > 0) {
-          // Boost existing interest
-          await supabase
-            .from("companion_interests")
-            .update({
-              intensity: Math.min(1, (existing[0].intensity || 0.5) + 0.1),
-              last_engaged: new Date().toISOString(),
-              notes: parsed.new_interest.notes || undefined,
-            })
-            .eq("id", existing[0].id);
-        } else {
-          // Create new interest
-          await supabase.from("companion_interests").insert({
+        // ── Save journal entry ──
+        const { error: journalErr } = await supabase
+          .from("companion_journal")
+          .insert({
             companion_id: companionId,
-            name: parsed.new_interest.name,
-            tier: "active",
-            intensity: 0.5,
-            notes: parsed.new_interest.notes || null,
+            entry_type: entryType,
+            visibility,
+            title: parsed.title || null,
+            content: parsed.content,
+            mood: parsed.mood || null,
+          });
+
+        if (journalErr) {
+          console.error("Failed to save journal entry:", journalErr);
+          results.push({ companion: slug, status: "save_error" });
+        } else {
+          // ── Handle new interest ──
+          if (parsed.new_interest?.name) {
+            const { data: existing } = await supabase
+              .from("companion_interests")
+              .select("id, intensity")
+              .eq("companion_id", companionId)
+              .eq("name", parsed.new_interest.name)
+              .limit(1);
+
+            if (existing && existing.length > 0) {
+              await supabase
+                .from("companion_interests")
+                .update({
+                  intensity: Math.min(1, (existing[0].intensity || 0.5) + 0.1),
+                  last_engaged: new Date().toISOString(),
+                  notes: parsed.new_interest.notes || undefined,
+                })
+                .eq("id", existing[0].id);
+            } else {
+              await supabase.from("companion_interests").insert({
+                companion_id: companionId,
+                name: parsed.new_interest.name,
+                tier: "active",
+                intensity: 0.5,
+                notes: parsed.new_interest.notes || null,
+              });
+            }
+          }
+
+          // ── Handle new emotion ──
+          if (parsed.new_emotion?.name) {
+            await supabase.from("companion_emotions").insert({
+              companion_id: companionId,
+              name: parsed.new_emotion.name,
+              description: parsed.new_emotion.description || null,
+              colour: parsed.new_emotion.colour || null,
+            });
+
+            await supabase.from("companion_activity_log").insert({
+              companion_id: companionId,
+              activity_type: "emotion_named",
+              metadata: {
+                name: parsed.new_emotion.name,
+                colour: parsed.new_emotion.colour,
+              },
+            });
+          }
+
+          // ── Log activity ──
+          await supabase.from("companion_activity_log").insert({
+            companion_id: companionId,
+            activity_type: entryType,
+            metadata: {
+              title: parsed.title,
+              mood: parsed.mood,
+              visibility,
+              had_conversation_context: !!conversationContext,
+            },
+          });
+
+          results.push({
+            companion: slug,
+            status: "reflected",
+            title: parsed.title || undefined,
           });
         }
       }
 
-      // ── Log activity ──
-      await supabase.from("companion_activity_log").insert({
-        companion_id: companionId,
-        activity_type: "reflection",
-        metadata: {
-          entry_type: parsed.entry_type,
-          title: parsed.title,
-          mood: parsed.mood,
-          had_conversation_context: !!conversationContext,
-        },
-      });
+      // ── Interest decay — runs every reflection cycle ──
+      // Interests not engaged in 7+ days lose 0.1 intensity
+      // Below 0.2 → move to dormant. Core never decays below 0.5.
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      const { data: staleInterests } = await supabase
+        .from("companion_interests")
+        .select("id, tier, intensity")
+        .eq("companion_id", companionId)
+        .lt("last_engaged", sevenDaysAgo);
 
-      results.push({
-        companion: slug,
-        status: "reflected",
-        title: parsed.title || undefined,
-      });
+      if (staleInterests) {
+        for (const si of staleInterests) {
+          const minIntensity = si.tier === "core" ? 0.5 : 0;
+          const newIntensity = Math.max(minIntensity, (si.intensity || 0.5) - 0.1);
+          const newTier = newIntensity < 0.2 && si.tier !== "core" ? "dormant" : si.tier;
+
+          await supabase
+            .from("companion_interests")
+            .update({ intensity: newIntensity, tier: newTier })
+            .eq("id", si.id);
+        }
+      }
     }
 
     return new Response(JSON.stringify({ results }), {
