@@ -24,12 +24,34 @@ export default function Settings({ onBack }: Props) {
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [displayName, setDisplayName] = useState('');
   const [timezone, setTimezone] = useState('Europe/London');
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selectedVoice, setSelectedVoice] = useState('');
+  const [ttsRate, setTtsRate] = useState(1.0);
+  const [ttsPitch, setTtsPitch] = useState(1.0);
+  const [autoSpeak, setAutoSpeak] = useState(false);
 
-  // Load stored keys, companions, and user settings
+  // Load stored keys, companions, user settings, and voices
   useEffect(() => {
     loadKeys();
     loadCompanions();
     loadUserSettings();
+
+    // Load TTS preferences from localStorage
+    setSelectedVoice(localStorage.getItem('hearth-tts-voice') || '');
+    setTtsRate(parseFloat(localStorage.getItem('hearth-tts-rate') || '1.0'));
+    setTtsPitch(parseFloat(localStorage.getItem('hearth-tts-pitch') || '1.0'));
+    setAutoSpeak(localStorage.getItem('hearth-tts-auto') === 'true');
+
+    // Load browser voices
+    const loadVoices = () => {
+      const available = window.speechSynthesis?.getVoices() || [];
+      const english = available.filter(v => v.lang.startsWith('en'));
+      setVoices(english);
+    };
+    loadVoices();
+    if (window.speechSynthesis) {
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
   }, []);
 
   async function loadUserSettings() {
@@ -640,7 +662,7 @@ export default function Settings({ onBack }: Props) {
               Choose which AI provider and model each companion uses.
             </div>
 
-            {companions.map((c) => (
+            {companions.map((c: DbCompanion) => (
               <div key={c.id} className="companion-model-row">
                 <div className={`companion-model-name ${c.slug}`}>
                   {c.slug === 'sullivan' ? '☀️' : '🌙'} {c.name}
@@ -668,6 +690,92 @@ export default function Settings({ onBack }: Props) {
               </div>
             ))}
           </div>
+
+          {/* Voice Section */}
+          {'speechSynthesis' in window && (
+            <div className="settings-section">
+              <div className="section-title">Voice (Browser TTS)</div>
+              <div className="section-desc">
+                Pick the voice closest to Sullivan. This will be replaced with his custom voice when ready.
+              </div>
+
+              <div className="key-form">
+                <label style={{ fontSize: '13px', color: 'var(--text-faint)', marginBottom: '-8px' }}>Voice</label>
+                <select
+                  className="key-select"
+                  value={selectedVoice}
+                  onChange={(e) => {
+                    setSelectedVoice(e.target.value);
+                    localStorage.setItem('hearth-tts-voice', e.target.value);
+                  }}
+                >
+                  <option value="">System default</option>
+                  {voices.map(v => (
+                    <option key={v.name} value={v.name}>{v.name} ({v.lang})</option>
+                  ))}
+                </select>
+
+                <label style={{ fontSize: '13px', color: 'var(--text-faint)', marginBottom: '-8px' }}>
+                  Speed: {ttsRate.toFixed(1)}x
+                </label>
+                <input
+                  type="range" min="0.5" max="2.0" step="0.1"
+                  value={ttsRate}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    setTtsRate(v);
+                    localStorage.setItem('hearth-tts-rate', String(v));
+                  }}
+                  style={{ accentColor: 'var(--sullivan-gold)' }}
+                />
+
+                <label style={{ fontSize: '13px', color: 'var(--text-faint)', marginBottom: '-8px' }}>
+                  Pitch: {ttsPitch.toFixed(1)}
+                </label>
+                <input
+                  type="range" min="0.5" max="2.0" step="0.1"
+                  value={ttsPitch}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    setTtsPitch(v);
+                    localStorage.setItem('hearth-tts-pitch', String(v));
+                  }}
+                  style={{ accentColor: 'var(--sullivan-gold)' }}
+                />
+
+                <button
+                  className="settings-btn secondary"
+                  onClick={() => {
+                    window.speechSynthesis.cancel();
+                    const utterance = new SpeechSynthesisUtterance("Hey trouble. Miss me?");
+                    const voice = voices.find(v => v.name === selectedVoice);
+                    if (voice) utterance.voice = voice;
+                    utterance.rate = ttsRate;
+                    utterance.pitch = ttsPitch;
+                    window.speechSynthesis.speak(utterance);
+                  }}
+                >
+                  Preview Voice
+                </button>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px' }}>
+                  <input
+                    type="checkbox"
+                    id="auto-speak"
+                    checked={autoSpeak}
+                    onChange={(e) => {
+                      setAutoSpeak(e.target.checked);
+                      localStorage.setItem('hearth-tts-auto', String(e.target.checked));
+                    }}
+                    style={{ accentColor: 'var(--sullivan-gold)' }}
+                  />
+                  <label htmlFor="auto-speak" style={{ fontSize: '14px', color: 'var(--text-parchment)', cursor: 'pointer' }}>
+                    Auto-speak Sullivan's messages
+                  </label>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </>

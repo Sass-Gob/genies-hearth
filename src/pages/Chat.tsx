@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { getCompanion } from '../lib/companions';
+import { useTTS } from '../hooks/useTTS';
 import type { Message, Conversation, DbCompanion, Reaction } from '../lib/types';
 
 interface Props {
@@ -57,9 +58,13 @@ export default function Chat({ companionSlug, onBack }: Props) {
   const [confirmDeleteConvId, setConfirmDeleteConvId] = useState<string | null>(null);
   const [confirmDeleteMsgId, setConfirmDeleteMsgId] = useState<string | null>(null);
   const [msgContextMenu, setMsgContextMenu] = useState<{ msgId: string; x: number; y: number } | null>(null);
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const { speak, stop, speakingMsgId, hasBrowserTTS } = useTTS();
+  const hasBrowserSTT = typeof window !== 'undefined' && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
 
   const companionEmoji: Record<string, string> = { sullivan: '🖤', enzo: '🌙' };
   const baseEmojis = ['❤️', '🔥', '😂', '😢', '👀'];
@@ -467,6 +472,47 @@ export default function Chat({ companionSlug, onBack }: Props) {
     return () => { clearTimeout(timer); document.removeEventListener('click', handler); };
   }, [convMenuId]);
 
+  // Auto-speak new assistant messages if enabled
+  useEffect(() => {
+    if (localStorage.getItem('hearth-tts-auto') !== 'true') return;
+    if (messages.length === 0) return;
+    const last = messages[messages.length - 1];
+    if (last.role === 'assistant' && !last.id.startsWith('error-')) {
+      speak(last.content, last.id);
+    }
+  // Only fire on messages array length change (new message)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length]);
+
+  function startListening() {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) return;
+
+    const recognition = new SR();
+    recognition.lang = 'en-GB';
+    recognition.interimResults = true;
+    recognition.continuous = false;
+
+    recognition.onresult = (event: any) => {
+      const transcript = Array.from(event.results as SpeechRecognitionResultList)
+        .map((result: any) => result[0].transcript)
+        .join('');
+      setInput(transcript);
+    };
+
+    recognition.onerror = () => setIsListening(false);
+    recognition.onend = () => setIsListening(false);
+
+    recognitionRef.current = recognition;
+    setIsListening(true);
+    recognition.start();
+  }
+
+  function stopListening() {
+    recognitionRef.current?.stop();
+    setIsListening(false);
+  }
+
   // Close emoji picker on outside tap
   useEffect(() => {
     if (!reactionPickerMsgId) return;
@@ -776,6 +822,29 @@ export default function Chat({ companionSlug, onBack }: Props) {
           flex-shrink: 0;
         }
         .send-btn:hover { opacity: 1; }
+        .mic-btn {
+          width: 36px;
+          height: 36px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 50%;
+          font-size: 16px;
+          opacity: 0.5;
+          color: var(--text-faint);
+          transition: all 0.2s;
+          flex-shrink: 0;
+        }
+        .mic-btn:hover { opacity: 0.8; }
+        .mic-btn.listening {
+          opacity: 1;
+          color: #ef4444;
+          animation: mic-pulse 1.2s ease-in-out infinite;
+        }
+        @keyframes mic-pulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.3); }
+          50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+        }
 
         /* Conversation list overlay */
         .conv-overlay {
@@ -1080,6 +1149,18 @@ export default function Chat({ companionSlug, onBack }: Props) {
                   )}
                   <div className={`message-meta ${msg.role}`}>
                     <span className="message-time">{formatMessageTime(msg.created_at)}</span>
+                    {hasBrowserTTS && msg.role === 'assistant' && !msg.id.startsWith('error-') && (
+                      <button
+                        className="react-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          speakingMsgId === msg.id ? stop() : speak(msg.content, msg.id);
+                        }}
+                        title={speakingMsgId === msg.id ? 'Stop' : 'Read aloud'}
+                      >
+                        {speakingMsgId === msg.id ? '⏹' : '🔊'}
+                      </button>
+                    )}
                     {!msg.id.startsWith('temp-') && !msg.id.startsWith('error-') && (
                       <button
                         className="react-btn"
@@ -1136,6 +1217,15 @@ export default function Chat({ companionSlug, onBack }: Props) {
             placeholder={displayCompanion.name}
             rows={1}
           />
+          {hasBrowserSTT && (
+            <button
+              className={`mic-btn ${isListening ? 'listening' : ''}`}
+              onClick={isListening ? stopListening : startListening}
+              title={isListening ? 'Stop listening' : 'Voice input'}
+            >
+              🎙
+            </button>
+          )}
           <button className="send-btn" onClick={sendMessage} title="Send">
             ➤
           </button>
