@@ -44,6 +44,70 @@ function formatConvTitle(conv: Conversation): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+function VoiceNoteBubble({ msg, speak, stop, speakingMsgId }: {
+  msg: Message;
+  speak: (text: string, msgId?: string) => void;
+  stop: () => void;
+  speakingMsgId: string | null;
+}) {
+  const [showTranscript, setShowTranscript] = useState(false);
+  const [audioProgress, setAudioProgress] = useState(0);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const isCompanion = msg.role === 'assistant';
+  const hasAudio = !!msg.audio_data;
+
+  function togglePlay() {
+    if (isCompanion) {
+      // Sullivan: browser TTS
+      if (speakingMsgId === msg.id) {
+        stop();
+      } else {
+        speak(msg.content, msg.id);
+      }
+    } else if (hasAudio && audioRef.current) {
+      // User: recorded audio
+      if (audioRef.current.paused) {
+        audioRef.current.play();
+      } else {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      }
+    }
+  }
+
+  const duration = msg.duration || (isCompanion ? Math.round(msg.content.length / 15) : 0);
+
+  return (
+    <div className="vn-container">
+      {hasAudio && (
+        <audio
+          ref={audioRef}
+          src={msg.audio_data}
+          onTimeUpdate={() => {
+            if (audioRef.current) setAudioProgress((audioRef.current.currentTime / audioRef.current.duration) * 100);
+          }}
+          onEnded={() => setAudioProgress(0)}
+        />
+      )}
+      <div className="vn-row">
+        <button className="vn-play" onClick={togglePlay}>
+          {(speakingMsgId === msg.id) ? '⏸' : '▶'}
+        </button>
+        <div className="vn-bar">
+          <div className="vn-bar-fill" style={{ width: `${speakingMsgId === msg.id ? 50 : audioProgress}%` }} />
+        </div>
+        {duration > 0 && (
+          <span className="vn-duration">{Math.floor(duration / 60)}:{(duration % 60).toString().padStart(2, '0')}</span>
+        )}
+      </div>
+      <button className="vn-transcript-toggle" onClick={() => setShowTranscript(!showTranscript)}>
+        {showTranscript ? 'Hide text' : 'Show text'}
+      </button>
+      {showTranscript && <div className="vn-transcript">{msg.content}</div>}
+    </div>
+  );
+}
+
 export default function Chat({ companionSlug, onBack }: Props) {
   const displayCompanion = getCompanion(companionSlug)!;
   const [dbCompanion, setDbCompanion] = useState<DbCompanion | null>(null);
@@ -58,13 +122,17 @@ export default function Chat({ companionSlug, onBack }: Props) {
   const [confirmDeleteConvId, setConfirmDeleteConvId] = useState<string | null>(null);
   const [confirmDeleteMsgId, setConfirmDeleteMsgId] = useState<string | null>(null);
   const [msgContextMenu, setMsgContextMenu] = useState<{ msgId: string; x: number; y: number } | null>(null);
-  const [isListening, setIsListening] = useState(false);
-  const recognitionRef = useRef<any>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recTranscriptRef = useRef<string>('');
+  const recRecognitionRef = useRef<any>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const { speak, stop, speakingMsgId, hasBrowserTTS } = useTTS();
-  const hasBrowserSTT = typeof window !== 'undefined' && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+  const { speak, stop, speakingMsgId } = useTTS();
 
   const companionEmoji: Record<string, string> = { sullivan: '🖤', enzo: '🌙' };
   const baseEmojis = ['❤️', '🔥', '😂', '😢', '👀'];
@@ -377,6 +445,84 @@ export default function Chat({ companionSlug, onBack }: Props) {
     }
   }
 
+  async function sendVoiceMessage(transcript: string, audioData: string, duration: number) {
+    if (!conversation || !dbCompanion) return;
+
+    setIsTyping(true);
+
+    // Optimistic user voice message
+    const tempId = `temp-${Date.now()}`;
+    const userMsg: Message = {
+      id: tempId,
+      conversation_id: conversation.id,
+      companion_id: dbCompanion.id,
+      role: 'user',
+      content: transcript,
+      reactions: [],
+      media_type: 'voice',
+      audio_data: audioData,
+      duration,
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, userMsg]);
+
+    try {
+      // Save transcript as the message content
+      await supabase.from('messages' as any).insert({
+        conversation_id: conversation.id,
+        companion_id: dbCompanion.id,
+        role: 'user',
+        content: transcript,
+      });
+
+      // Call edge function with transcript
+      const { data, error } = await supabase.functions.invoke('chat', {
+        body: {
+          conversation_id: conversation.id,
+          companion_id: dbCompanion.id,
+          message: transcript,
+        },
+      });
+
+      if (error) throw error;
+
+      if (data?.error && data?.display_message) {
+        setMessages((prev) => [...prev, {
+          id: `error-${Date.now()}`,
+          conversation_id: conversation.id,
+          companion_id: dbCompanion.id,
+          role: 'assistant',
+          content: data.display_message,
+          reactions: [],
+          media_type: 'voice',
+          created_at: new Date().toISOString(),
+        }]);
+        return;
+      }
+
+      if (data?.message) {
+        const m = data.message;
+        setMessages((prev) => {
+          if (prev.some((msg) => msg.id === m.id)) return prev;
+          return [...prev, { ...m, reactions: m.reactions || [], media_type: 'voice' as const }];
+        });
+      }
+    } catch (err) {
+      console.error('Failed to send voice message:', err);
+      setMessages((prev) => [...prev, {
+        id: `error-${Date.now()}`,
+        conversation_id: conversation.id,
+        companion_id: dbCompanion.id,
+        role: 'assistant',
+        content: "*Something's wrong with the connection. Check the settings page?*",
+        reactions: [],
+        created_at: new Date().toISOString(),
+      }]);
+    } finally {
+      setIsTyping(false);
+    }
+  }
+
   async function createNewConversation() {
     if (!dbCompanion) return;
 
@@ -484,33 +630,100 @@ export default function Chat({ companionSlug, onBack }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages.length]);
 
-  function startListening() {
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) return;
-
-    const recognition = new SR();
-    recognition.lang = 'en-GB';
-    recognition.interimResults = true;
-    recognition.continuous = false;
-
-    recognition.onresult = (event: any) => {
-      const transcript = Array.from(event.results as SpeechRecognitionResultList)
-        .map((result: any) => result[0].transcript)
-        .join('');
-      setInput(transcript);
-    };
-
-    recognition.onerror = () => setIsListening(false);
-    recognition.onend = () => setIsListening(false);
-
-    recognitionRef.current = recognition;
-    setIsListening(true);
-    recognition.start();
+  function blobToBase64(blob: Blob): Promise<string> {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.readAsDataURL(blob);
+    });
   }
 
-  function stopListening() {
-    recognitionRef.current?.stop();
-    setIsListening(false);
+  async function startRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus' : 'audio/webm';
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+
+      chunksRef.current = [];
+      recTranscriptRef.current = '';
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      mediaRecorderRef.current = mediaRecorder;
+      mediaRecorder.start(100);
+      setIsRecording(true);
+      setRecordingDuration(0);
+
+      recTimerRef.current = setInterval(() => {
+        setRecordingDuration((prev) => {
+          if (prev >= 59) { stopRecordingAndSend(); return 60; }
+          return prev + 1;
+        });
+      }, 1000);
+
+      // Parallel STT for transcript
+      const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SR) {
+        const recognition = new SR();
+        recognition.lang = 'en-GB';
+        recognition.interimResults = false;
+        recognition.continuous = true;
+        recognition.onresult = (event: any) => {
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            if (event.results[i].isFinal) {
+              recTranscriptRef.current += event.results[i][0].transcript + ' ';
+            }
+          }
+        };
+        recognition.onerror = () => {};
+        recRecognitionRef.current = recognition;
+        recognition.start();
+      }
+    } catch (err) {
+      console.error('Mic access denied:', err);
+    }
+  }
+
+  function stopRecordingAndSend() {
+    if (!mediaRecorderRef.current || !isRecording) return;
+
+    setIsRecording(false);
+    if (recTimerRef.current) clearInterval(recTimerRef.current);
+    recRecognitionRef.current?.stop();
+
+    const duration = recordingDuration;
+
+    mediaRecorderRef.current.onstop = async () => {
+      const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
+      mediaRecorderRef.current?.stream.getTracks().forEach(t => t.stop());
+
+      // Discard if too short
+      if (audioBlob.size < 3000) return;
+
+      const audioData = await blobToBase64(audioBlob);
+      const transcript = recTranscriptRef.current.trim() || '[voice note]';
+
+      // Send as voice message
+      await sendVoiceMessage(transcript, audioData, duration);
+    };
+
+    mediaRecorderRef.current.stop();
+  }
+
+  function cancelRecording() {
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.stream.getTracks().forEach(t => t.stop());
+      mediaRecorderRef.current.stop();
+    }
+    recRecognitionRef.current?.stop();
+    chunksRef.current = [];
+    recTranscriptRef.current = '';
+    setIsRecording(false);
+    setRecordingDuration(0);
+    if (recTimerRef.current) clearInterval(recTimerRef.current);
   }
 
   // Close emoji picker on outside tap
@@ -841,9 +1054,110 @@ export default function Chat({ companionSlug, onBack }: Props) {
           color: #ef4444;
           animation: mic-pulse 1.2s ease-in-out infinite;
         }
+        .mic-btn.recording {
+          opacity: 1;
+          color: #ef4444;
+        }
         @keyframes mic-pulse {
           0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.3); }
           50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+        }
+
+        /* Recording bar */
+        .recording-bar {
+          flex: 1;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 0 16px;
+          min-height: 36px;
+        }
+        .rec-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background: #ef4444;
+          animation: mic-pulse 1.2s ease-in-out infinite;
+          flex-shrink: 0;
+        }
+        .rec-text {
+          font-size: 14px;
+          color: var(--text-parchment);
+          flex: 1;
+        }
+        .rec-cancel {
+          font-size: 13px;
+          color: var(--text-faint);
+          opacity: 0.6;
+          transition: opacity 0.2s;
+        }
+        .rec-cancel:hover { opacity: 1; }
+
+        /* Voice note bubble */
+        .message-bubble.voice-note {
+          min-width: 200px;
+          max-width: 280px;
+        }
+        .vn-container {
+          width: 100%;
+        }
+        .vn-row {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+        .vn-play {
+          width: 32px;
+          height: 32px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 50%;
+          background: rgba(255, 255, 255, 0.08);
+          font-size: 14px;
+          flex-shrink: 0;
+          transition: background 0.15s;
+        }
+        .vn-play:hover {
+          background: rgba(255, 255, 255, 0.15);
+        }
+        .vn-bar {
+          flex: 1;
+          height: 3px;
+          border-radius: 2px;
+          background: rgba(255, 255, 255, 0.12);
+          overflow: hidden;
+        }
+        .vn-bar-fill {
+          height: 100%;
+          border-radius: 2px;
+          background: var(--sullivan-gold);
+          transition: width 0.1s linear;
+        }
+        .vn-duration {
+          font-size: 11px;
+          color: var(--text-faint);
+          opacity: 0.6;
+          flex-shrink: 0;
+          font-family: monospace;
+        }
+        .vn-transcript-toggle {
+          font-size: 11px;
+          color: var(--text-faint);
+          opacity: 0.4;
+          margin-top: 6px;
+          transition: opacity 0.2s;
+        }
+        .vn-transcript-toggle:hover { opacity: 0.7; }
+        .vn-transcript {
+          font-size: 13px;
+          color: var(--text-faint);
+          opacity: 0.6;
+          margin-top: 4px;
+          line-height: 1.4;
+          white-space: pre-wrap;
+          word-wrap: break-word;
+          overflow-wrap: break-word;
         }
 
         /* Conversation list overlay */
@@ -1125,13 +1439,17 @@ export default function Chat({ companionSlug, onBack }: Props) {
               <div className={`message-row ${msg.role}`}>
                 <div className="message-col">
                   <div
-                    className={`message-bubble ${msg.role}`}
+                    className={`message-bubble ${msg.role} ${(msg.media_type === 'voice' || (msg.role === 'assistant' && !msg.id.startsWith('error-'))) ? 'voice-note' : ''}`}
                     onContextMenu={(e) => handleMsgContextMenu(e, msg.id)}
                     onTouchStart={() => handleMsgTouchStart(msg.id)}
                     onTouchEnd={handleMsgTouchEnd}
                     onTouchMove={handleMsgTouchEnd}
                   >
-                    {msg.content}
+                    {(msg.media_type === 'voice' || (msg.role === 'assistant' && !msg.id.startsWith('error-'))) ? (
+                      <VoiceNoteBubble msg={msg} speak={speak} stop={stop} speakingMsgId={speakingMsgId} />
+                    ) : (
+                      msg.content
+                    )}
                   </div>
                   {/* Reactions display */}
                   {msg.reactions && msg.reactions.length > 0 && (
@@ -1149,18 +1467,6 @@ export default function Chat({ companionSlug, onBack }: Props) {
                   )}
                   <div className={`message-meta ${msg.role}`}>
                     <span className="message-time">{formatMessageTime(msg.created_at)}</span>
-                    {hasBrowserTTS && msg.role === 'assistant' && !msg.id.startsWith('error-') && (
-                      <button
-                        className="react-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          speakingMsgId === msg.id ? stop() : speak(msg.content, msg.id);
-                        }}
-                        title={speakingMsgId === msg.id ? 'Stop' : 'Read aloud'}
-                      >
-                        {speakingMsgId === msg.id ? '⏹' : '🔊'}
-                      </button>
-                    )}
                     {!msg.id.startsWith('temp-') && !msg.id.startsWith('error-') && (
                       <button
                         className="react-btn"
@@ -1204,31 +1510,39 @@ export default function Chat({ companionSlug, onBack }: Props) {
 
         {/* Input */}
         <div className="chat-input-area">
-          <textarea
-            ref={inputRef}
-            className="chat-textarea"
-            value={input}
-            onChange={(e) => {
-              setInput(e.target.value);
-              const el = e.target;
-              el.style.height = 'auto';
-              el.style.height = Math.min(el.scrollHeight, 200) + 'px';
-            }}
-            placeholder={displayCompanion.name}
-            rows={1}
-          />
-          {hasBrowserSTT && (
-            <button
-              className={`mic-btn ${isListening ? 'listening' : ''}`}
-              onClick={isListening ? stopListening : startListening}
-              title={isListening ? 'Stop listening' : 'Voice input'}
-            >
-              🎙
+          {isRecording ? (
+            <div className="recording-bar">
+              <div className="rec-dot" />
+              <span className="rec-text">Recording... {Math.floor(recordingDuration / 60)}:{(recordingDuration % 60).toString().padStart(2, '0')}</span>
+              <button className="rec-cancel" onClick={cancelRecording}>Cancel</button>
+            </div>
+          ) : (
+            <textarea
+              ref={inputRef}
+              className="chat-textarea"
+              value={input}
+              onChange={(e) => {
+                setInput(e.target.value);
+                const el = e.target;
+                el.style.height = 'auto';
+                el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+              }}
+              placeholder={displayCompanion.name}
+              rows={1}
+            />
+          )}
+          <button
+            className={`mic-btn ${isRecording ? 'recording' : ''}`}
+            onClick={isRecording ? stopRecordingAndSend : startRecording}
+            title={isRecording ? 'Stop & send' : 'Voice note'}
+          >
+            {isRecording ? '⏹' : '🎤'}
+          </button>
+          {!isRecording && (
+            <button className="send-btn" onClick={sendMessage} title="Send">
+              ➤
             </button>
           )}
-          <button className="send-btn" onClick={sendMessage} title="Send">
-            ➤
-          </button>
         </div>
 
         {/* Conversation list overlay */}

@@ -45,6 +45,9 @@ export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
   reactions: Reaction[];
+  media_type?: 'text' | 'voice';
+  audio_data?: string;  // base64 data URL (client-side only, not persisted to DB)
+  duration?: number;     // voice note duration in seconds
   created_at: string;
 }
 
