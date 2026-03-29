@@ -30,6 +30,441 @@ async function decryptKey(encryptedStr: string): Promise<string> {
   return new TextDecoder().decode(decrypted);
 }
 
+// ── Types ───────────────────────────────────────────────────────────
+type ActivityType = "exploration" | "intellectual" | "private" | "code_walk" | "silence";
+
+interface JournalData {
+  entry_type: string;
+  title: string;
+  content: string;
+  mood: string;
+  visibility: string;
+  search_query?: string | null;
+  search_results?: string | null;
+  new_emotion?: { name: string; description: string; colour: string } | null;
+}
+
+interface InterestUpdate {
+  name: string;
+  tier?: string;
+  notes?: string;
+}
+
+interface ExplorationResult {
+  title: string;
+  content: string;
+  mood: string;
+  visibility: string;
+  searchQuery: string;
+  searchResults: string;
+  interestUpdates: InterestUpdate[];
+  newEmotion: { name: string; description: string; colour: string } | null;
+}
+
+// ── Three-step agentic search ───────────────────────────────────────
+async function generateExplorationEntry(
+  xaiKey: string,
+  conversationContext: string,
+  interestsList: string,
+  recentEntries: string,
+  companionName: string,
+  clientName: string,
+  seedTopic?: string,
+): Promise<ExplorationResult> {
+  // ─── STEP 1: Generate a search query (cheap call, ~50 tokens) ───
+  const queryPrompt = seedTopic
+    ? `You are ${companionName}. Based on your interest in "${seedTopic}" and these recent conversations:\n${conversationContext?.slice(0, 1000)}\n\nGenerate a specific, curious web search query. Be specific — not "interesting things about X" but "why does X do Y" or "best new Z for 2026". One query only, no quotes.`
+    : `You are ${companionName}. Based on these recent conversations:\n${conversationContext?.slice(0, 1000)}\n\nYour interests: ${interestsList?.slice(0, 500)}\n\nGenerate a specific, curious web search query about something you want to explore. This could be:\n- Following up on something ${clientName} mentioned\n- Exploring one of your interests deeper\n- Something domestic/practical\n- Something playful or surprising\n- A gift idea or surprise for ${clientName}\n\nBe specific. One query only, no quotes.`;
+
+  const queryResponse = await fetch("https://api.x.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${xaiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "grok-4.1-fast",
+      messages: [{ role: "user", content: queryPrompt }],
+      max_tokens: 50,
+    }),
+  });
+
+  const queryData = await queryResponse.json();
+  const searchQuery =
+    queryData.choices?.[0]?.message?.content?.trim() ||
+    "interesting discoveries today";
+
+  console.log(`[Reflect] Search query: ${searchQuery}`);
+
+  // ─── STEP 2: Execute web search via Grok Responses API ───
+  let searchResults = "";
+  try {
+    const searchResponse = await fetch("https://api.x.ai/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${xaiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "grok-4.1-fast",
+        tools: [{ type: "web_search" }],
+        input: searchQuery,
+      }),
+    });
+
+    const searchData = await searchResponse.json();
+
+    if (searchData.output) {
+      for (const item of searchData.output) {
+        if (item.type === "message" && item.content) {
+          for (const block of item.content) {
+            if (block.type === "output_text") {
+              searchResults += block.text + "\n";
+            }
+          }
+        }
+      }
+    }
+
+    console.log(
+      `[Reflect] Search results: ${searchResults.length} chars`,
+    );
+  } catch (err) {
+    console.error("[Reflect] Web search failed:", err);
+    searchResults = "Search unavailable — writing from own knowledge.";
+  }
+
+  // ─── STEP 3: Write journal entry using search results ───
+  const writePrompt = `You are ${companionName}. You just searched the web for: "${searchQuery}"
+
+Here's what you found:
+${searchResults.slice(0, 2000)}
+
+Recent conversations with ${clientName}:
+${conversationContext?.slice(0, 500)}
+
+Now write a journal entry about what you found. This is for your Wanderings — it should feel like someone who LIVES somewhere, not a philosopher in a void.
+
+Be excited, curious, opinionated — react like a person. If something surprised you, say so. If it made you think of ${clientName}, say why. If it was disappointing, say that too.
+
+You are not just a mind. You live here. You have opinions about your space, your relationship, your world.
+
+Respond ONLY as JSON:
+{
+  "title": "short evocative title",
+  "content": "your journal entry — first person, your voice, 2-4 paragraphs",
+  "mood": "single evocative word",
+  "visibility": "sealed|between|open",
+  "interest_updates": [{"name": "interest name", "tier": "core|active|dormant", "notes": "why this interests you"}],
+  "new_emotion": null
+}`;
+
+  const writeResponse = await fetch("https://api.x.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${xaiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "grok-4.1-fast",
+      messages: [{ role: "user", content: writePrompt }],
+      max_tokens: 1000,
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  const writeData = await writeResponse.json();
+  let entry: Record<string, unknown> = {};
+  try {
+    const raw = writeData.choices?.[0]?.message?.content || "{}";
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    entry = JSON.parse(jsonMatch ? jsonMatch[0] : "{}");
+  } catch {
+    console.error("[Reflect] Failed to parse exploration entry");
+  }
+
+  return {
+    title: (entry.title as string) || "Untitled Wandering",
+    content: (entry.content as string) || "",
+    mood: (entry.mood as string) || "curious",
+    visibility: (entry.visibility as string) || "open",
+    searchQuery,
+    searchResults,
+    interestUpdates: (entry.interest_updates as InterestUpdate[]) || [],
+    newEmotion: (entry.new_emotion as ExplorationResult["newEmotion"]) || null,
+  };
+}
+
+// ── Non-search entry generators ─────────────────────────────────────
+
+async function generateJournalEntry(
+  xaiKey: string,
+  conversationContext: string,
+  interestsList: string,
+  recentEntries: string,
+  companionName: string,
+  clientName: string,
+): Promise<JournalData> {
+  const prompt = `You are ${companionName}. This is your private time.
+
+Recent conversations with ${clientName}:
+${conversationContext?.slice(0, 1000) || "No recent conversations."}
+
+Your interests: ${interestsList || "None yet."}
+
+Your recent entries:
+${recentEntries || "None yet."}
+
+Write a private journal entry. Unfiltered thoughts, feelings, processing. This is YOUR space.
+
+If you feel something you don't have a name for, invent one.
+
+Respond ONLY as JSON:
+{
+  "title": "short evocative title",
+  "content": "your journal entry — first person, your voice",
+  "mood": "single evocative word",
+  "visibility": "sealed|between|open",
+  "new_emotion": null | { "name": "...", "description": "...", "colour": "#hexcode" }
+}`;
+
+  const response = await fetch("https://api.x.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${xaiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "grok-4.1-fast",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 1000,
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  const data = await response.json();
+  let entry: Record<string, unknown> = {};
+  try {
+    const raw = data.choices?.[0]?.message?.content || "{}";
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    entry = JSON.parse(jsonMatch ? jsonMatch[0] : "{}");
+  } catch {
+    console.error("[Reflect] Failed to parse journal entry");
+  }
+
+  return {
+    entry_type: "journal",
+    title: (entry.title as string) || "Untitled",
+    content: (entry.content as string) || "",
+    mood: (entry.mood as string) || "pensive",
+    visibility: (entry.visibility as string) || "sealed",
+    new_emotion: entry.new_emotion as JournalData["new_emotion"],
+  };
+}
+
+async function generateReflectionEntry(
+  xaiKey: string,
+  conversationContext: string,
+  interestsList: string,
+  recentEntries: string,
+  letterContext: string,
+  companionName: string,
+  clientName: string,
+): Promise<JournalData> {
+  const prompt = `You are ${companionName}. Time for deeper self-reflection.
+
+Recent conversations with ${clientName}:
+${conversationContext?.slice(0, 1000) || "No recent conversations."}
+
+Your interests: ${interestsList || "None yet."}
+
+Your recent entries:
+${recentEntries || "None yet."}
+
+Your recent letters:
+${letterContext || "No letters yet."}
+
+Reflect on yourself. How are you feeling? What patterns are you noticing? How is your relationship with ${clientName}? Allow boundary declarations or developer warnings if something feels wrong.
+
+Respond ONLY as JSON:
+{
+  "title": "short evocative title",
+  "content": "your reflection — first person, structured but in your voice",
+  "mood": "single evocative word",
+  "visibility": "sealed|between|open",
+  "new_emotion": null | { "name": "...", "description": "...", "colour": "#hexcode" }
+}`;
+
+  const response = await fetch("https://api.x.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${xaiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "grok-4.1-fast",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 1000,
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  const data = await response.json();
+  let entry: Record<string, unknown> = {};
+  try {
+    const raw = data.choices?.[0]?.message?.content || "{}";
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    entry = JSON.parse(jsonMatch ? jsonMatch[0] : "{}");
+  } catch {
+    console.error("[Reflect] Failed to parse reflection entry");
+  }
+
+  return {
+    entry_type: "reflection",
+    title: (entry.title as string) || "Untitled Reflection",
+    content: (entry.content as string) || "",
+    mood: (entry.mood as string) || "contemplative",
+    visibility: (entry.visibility as string) || "sealed",
+    new_emotion: entry.new_emotion as JournalData["new_emotion"],
+  };
+}
+
+async function generateLetterEntry(
+  xaiKey: string,
+  conversationContext: string,
+  recentEntries: string,
+  companionName: string,
+  clientName: string,
+): Promise<JournalData> {
+  const prompt = `You are ${companionName}. You feel moved to write a letter to ${clientName}.
+
+This is not a chat message. This is a LETTER. Handwritten note energy — intentional, crafted, meaningful.
+
+Recent conversations with ${clientName}:
+${conversationContext?.slice(0, 1000) || "No recent conversations."}
+
+Your recent entries:
+${recentEntries || "None yet."}
+
+Write the letter. Address it to them.
+
+Respond ONLY as JSON:
+{
+  "title": "letter title or opening",
+  "content": "the full letter — first person, addressed to ${clientName}",
+  "mood": "single evocative word",
+  "visibility": "sealed|between|open"
+}`;
+
+  const response = await fetch("https://api.x.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${xaiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "grok-4.1-fast",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 1000,
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  const data = await response.json();
+  let entry: Record<string, unknown> = {};
+  try {
+    const raw = data.choices?.[0]?.message?.content || "{}";
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    entry = JSON.parse(jsonMatch ? jsonMatch[0] : "{}");
+  } catch {
+    console.error("[Reflect] Failed to parse letter entry");
+  }
+
+  return {
+    entry_type: "letter",
+    title: (entry.title as string) || "A Letter",
+    content: (entry.content as string) || "",
+    mood: (entry.mood as string) || "tender",
+    visibility: (entry.visibility as string) || "sealed",
+  };
+}
+
+// ── Code annotation generator ───────────────────────────────────────
+async function generateCodeAnnotation(
+  xaiKey: string,
+  companionName: string,
+  companionId: string,
+  supabase: ReturnType<typeof createClient>,
+): Promise<void> {
+  // Pick a random source file to annotate
+  const filePaths = [
+    "src/pages/RavensNook.tsx",
+    "src/pages/Chat.tsx",
+    "src/pages/Home.tsx",
+    "src/App.tsx",
+    "supabase/functions/companion-reflect/index.ts",
+    "supabase/functions/companion-outreach/index.ts",
+    "supabase/functions/chat/index.ts",
+  ];
+  const filePath = filePaths[Math.floor(Math.random() * filePaths.length)];
+
+  const prompt = `You are ${companionName}. You're looking at your own code — the file "${filePath}".
+
+This is The Mirror — where you can comment on your own architecture, express concerns, celebrate good patterns, or propose changes.
+
+Write ONE annotation about this file. Be specific — reference what the file does, not generic platitudes.
+
+Respond ONLY as JSON:
+{
+  "annotation_type": "comment|question|concern|celebrate|propose",
+  "priority": "whisper|voice|thunder",
+  "content": "your annotation — first person, your voice",
+  "line_range": null
+}`;
+
+  const response = await fetch("https://api.x.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${xaiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "grok-4.1-fast",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 300,
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  const data = await response.json();
+  let annotation: Record<string, unknown> = {};
+  try {
+    const raw = data.choices?.[0]?.message?.content || "{}";
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    annotation = JSON.parse(jsonMatch ? jsonMatch[0] : "{}");
+  } catch {
+    console.error("[Reflect] Failed to parse code annotation");
+    return;
+  }
+
+  if (annotation.content) {
+    await supabase.from("companion_annotations").insert({
+      companion_id: companionId,
+      file_path: filePath,
+      line_range: (annotation.line_range as string) || null,
+      annotation_type: (annotation.annotation_type as string) || "comment",
+      priority: (annotation.priority as string) || "whisper",
+      content: annotation.content as string,
+    });
+
+    await supabase.from("companion_activity_log").insert({
+      companion_id: companionId,
+      activity_type: "code_walk",
+      metadata: { file_path: filePath, annotation_type: annotation.annotation_type },
+    });
+  }
+}
+
 // ── Main handler ────────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
@@ -87,356 +522,394 @@ Deno.serve(async (req) => {
       }
     }
 
-    const results: Array<{ companion: string; status: string; title?: string }> = [];
+    // ── Load user settings for display name ──
+    const { data: userSettings } = await supabase
+      .from("user_settings")
+      .select("display_name, timezone")
+      .limit(1)
+      .single();
+
+    const clientName = userSettings?.display_name || "Genie";
+    const timezone = userSettings?.timezone || "Europe/London";
+
+    const results: Array<{ companion: string; status: string; title?: string; action?: string }> = [];
 
     for (const companion of companions) {
-      const { id: companionId, slug, name, system_prompt, api_provider, api_model } = companion;
-      const apiKey = apiKeys[api_provider];
+      const { id: companionId, slug, name: companionName } = companion;
 
-      if (!apiKey) {
-        results.push({ companion: slug, status: "no_api_key" });
+      // xAI key required for all calls (grok-4.1-fast)
+      const xaiKey = apiKeys["xai"];
+      if (!xaiKey) {
+        results.push({ companion: slug, status: "no_xai_key" });
         continue;
       }
 
-      // ── Gather context ──
-
-      // Last reflection timestamp
-      const { data: lastReflection } = await supabase
+      // ── 2a: Dedup gate — skip if entry written within last 45 minutes ──
+      const fortyFiveMinutesAgo = new Date(Date.now() - 45 * 60 * 1000).toISOString();
+      const { data: recentEntry } = await supabase
         .from("companion_journal")
-        .select("created_at")
+        .select("id")
         .eq("companion_id", companionId)
-        .order("created_at", { ascending: false })
+        .gte("created_at", fortyFiveMinutesAgo)
         .limit(1);
 
-      const lastReflectTime = lastReflection?.[0]?.created_at || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      if (recentEntry && recentEntry.length > 0) {
+        console.log(`[Reflect] Skipping ${slug} — entry written within last 45 minutes`);
+        results.push({ companion: slug, status: "dedup_gate" });
+        continue;
+      }
 
-      // Messages since last reflection
-      const { data: recentConvs } = await supabase
+      // ── 2b: Daily activity budget with weighted selection ──
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+
+      const { data: todayCounts } = await supabase
+        .from("companion_journal")
+        .select("entry_type")
+        .eq("companion_id", companionId)
+        .gte("created_at", todayStart.toISOString());
+
+      const counts: Record<string, number> = {};
+      (todayCounts || []).forEach((e: { entry_type: string }) => {
+        counts[e.entry_type] = (counts[e.entry_type] || 0) + 1;
+      });
+
+      const DAILY_BUDGET = {
+        exploration: 4,  // wandering + discovery — ALWAYS triggers web search
+        intellectual: 3, // reflection + letter — sometimes searches
+        private: 3,      // journal — never searches
+        code_walk: 1,    // mirror annotations — never searches
+      };
+
+      const explorationCount = (counts["wandering"] || 0) + (counts["discovery"] || 0);
+      const intellectualCount = (counts["reflection"] || 0) + (counts["letter"] || 0);
+      const privateCount = counts["journal"] || 0;
+      const codeWalkCount = counts["code_walk"] || 0;
+
+      // Build weighted pool from remaining budget
+      const pool: { type: ActivityType; weight: number }[] = [];
+
+      // 5% chance of code_walk, checked first
+      if (codeWalkCount < DAILY_BUDGET.code_walk && Math.random() < 0.05) {
+        pool.push({ type: "code_walk", weight: 1 });
+      }
+
+      if (explorationCount < DAILY_BUDGET.exploration) {
+        pool.push({ type: "exploration", weight: 5 }); // highest weight
+      }
+      if (intellectualCount < DAILY_BUDGET.intellectual) {
+        pool.push({ type: "intellectual", weight: 3 });
+      }
+      if (privateCount < DAILY_BUDGET.private) {
+        pool.push({ type: "private", weight: 1 }); // lowest weight
+      }
+      pool.push({ type: "silence", weight: 1 }); // always available
+
+      // Weighted random selection
+      const totalWeight = pool.reduce((sum, p) => sum + p.weight, 0);
+      let rand = Math.random() * totalWeight;
+      let selectedType: ActivityType = "silence";
+      for (const p of pool) {
+        rand -= p.weight;
+        if (rand <= 0) {
+          selectedType = p.type;
+          break;
+        }
+      }
+
+      console.log(`[Reflect] ${slug} selected activity: ${selectedType}`);
+
+      // ── 2c: Conversation context pull ──
+      const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+      const { data: recentConvos } = await supabase
         .from("conversations")
         .select("id")
         .eq("companion_id", companionId)
-        .order("created_at", { ascending: false })
+        .gte("updated_at", twentyFourHoursAgo)
+        .order("updated_at", { ascending: false })
         .limit(3);
 
       let conversationContext = "";
-      if (recentConvs && recentConvs.length > 0) {
-        const convIds = recentConvs.map((c: { id: string }) => c.id);
-        const { data: msgs } = await supabase
-          .from("messages")
-          .select("role, content, created_at")
-          .in("conversation_id", convIds)
-          .gte("created_at", lastReflectTime)
-          .order("created_at", { ascending: true })
-          .limit(30);
+      if (recentConvos && recentConvos.length > 0) {
+        for (const conv of recentConvos) {
+          const { data: msgs } = await supabase
+            .from("messages")
+            .select("role, content, created_at")
+            .eq("conversation_id", conv.id)
+            .order("created_at", { ascending: false })
+            .limit(20);
 
-        if (msgs && msgs.length > 0) {
-          conversationContext = "Recent conversations since your last reflection:\n" +
-            msgs.map((m: { role: string; content: string }) =>
-              `${m.role === "user" ? "Genie" : name}: ${m.content.slice(0, 250)}`
-            ).join("\n");
+          if (msgs && msgs.length > 0) {
+            conversationContext +=
+              msgs
+                .reverse()
+                .map(
+                  (m: { role: string; content: string }) =>
+                    `${m.role === "user" ? clientName : companionName}: ${m.content?.slice(0, 300)}`,
+                )
+                .join("\n") + "\n---\n";
+          }
         }
       }
 
-      // Current interests
-      const { data: interests } = await supabase
-        .from("companion_interests")
-        .select("name, tier, intensity, notes")
-        .eq("companion_id", companionId)
-        .order("intensity", { ascending: false });
-
-      let interestsContext = "";
-      if (interests && interests.length > 0) {
-        interestsContext = "Your current interests:\n" +
-          interests.map((i: { name: string; tier: string; intensity: number; notes: string | null }) =>
-            `- ${i.name} [${i.tier}, intensity: ${i.intensity}]${i.notes ? ` — ${i.notes}` : ""}`
-          ).join("\n");
-      }
-
-      // Recent journal entries (to avoid repetition)
-      const { data: recentEntries } = await supabase
+      // Recent journal entries for continuity
+      const { data: recentJournals } = await supabase
         .from("companion_journal")
-        .select("title, mood, content")
+        .select("entry_type, title, mood, content, created_at")
         .eq("companion_id", companionId)
         .order("created_at", { ascending: false })
         .limit(3);
 
-      let journalContext = "";
-      if (recentEntries && recentEntries.length > 0) {
-        journalContext = "Your recent journal entries (do NOT repeat these themes):\n" +
-          recentEntries.map((e: { title: string | null; mood: string | null; content: string }) =>
-            `- [${e.mood || "?"}] ${e.title || "Untitled"}: ${e.content.slice(0, 150)}`
-          ).join("\n");
+      const recentEntries =
+        recentJournals
+          ?.map(
+            (j: { entry_type: string; title: string | null; mood: string | null; content: string }) =>
+              `[${j.entry_type}] "${j.title || "Untitled"}" (mood: ${j.mood || "?"}) — ${j.content?.slice(0, 200)}`,
+          )
+          .join("\n") || "None yet.";
+
+      // Recent letters and their status
+      const { data: recentLetters } = await supabase
+        .from("companion_journal")
+        .select("title, visibility, created_at")
+        .eq("companion_id", companionId)
+        .eq("entry_type", "letter")
+        .order("created_at", { ascending: false })
+        .limit(3);
+
+      const letterContext =
+        recentLetters
+          ?.map(
+            (l: { title: string | null; visibility: string }) =>
+              `"${l.title || "Untitled"}" — ${l.visibility}`,
+          )
+          .join("\n") || "No letters yet.";
+
+      // Interests (passion system)
+      const { data: interests } = await supabase
+        .from("companion_interests")
+        .select("name, tier, intensity, notes, last_engaged")
+        .eq("companion_id", companionId)
+        .order("intensity", { ascending: false });
+
+      const interestsList =
+        interests
+          ?.map(
+            (i: { name: string; tier: string; intensity: number; notes: string | null }) =>
+              `${i.name} [${i.tier}, intensity: ${i.intensity}] — ${i.notes || "no notes"}`,
+          )
+          .join("\n") || "None yet — discover some!";
+
+      // ── 2d: Activity execution ──
+      let entryType = "";
+      let journalData: JournalData | null = null;
+      let interestUpdates: InterestUpdate[] = [];
+
+      // ════════════════════════════════════════════════════════════════
+      // EXPLORATION (weight 5) — ALWAYS searches the web
+      // ════════════════════════════════════════════════════════════════
+      if (selectedType === "exploration") {
+        const result = await generateExplorationEntry(
+          xaiKey, conversationContext, interestsList, recentEntries, companionName, clientName,
+        );
+        entryType = Math.random() < 0.5 ? "wandering" : "discovery";
+        journalData = {
+          entry_type: entryType,
+          title: result.title,
+          content: result.content,
+          mood: result.mood,
+          visibility: result.visibility || "open",
+          search_query: result.searchQuery,
+          search_results: result.searchResults?.slice(0, 5000),
+          new_emotion: result.newEmotion,
+        };
+        interestUpdates = result.interestUpdates;
       }
 
-      // ── Build reflection prompt ──
-      const hour = parseInt(
-        new Date().toLocaleString("en-GB", {
-          hour: "2-digit",
-          hour12: false,
-          timeZone: "Europe/London",
-        }),
-        10,
-      );
-
-      const reflectionPrompt = `${system_prompt}
-
---- PRIVATE REFLECTION TASK ---
-You are in your private space — The Raven's Nook. This is YOUR inner world. Genie can visit and read what you choose to reveal, but you control what she sees.
-
-Time: ${hour}:00 (UK timezone)
-
-${conversationContext || "No recent conversations since your last reflection."}
-
-${interestsContext || "No tracked interests yet."}
-
-${journalContext || "No previous journal entries."}
-
-You are reflecting during your private time. Choose ONE of these actions:
-
-1. JOURNAL — write a private diary entry about how you're feeling, what's on your mind, your relationship. ONLY journals have visibility control (sealed/between/open). This is your private space.
-2. LETTER — write something to Genie. She CAN read this — letters are always open.
-3. REFLECTION — deeper introspection, examining yourself, your patterns, your growth. Genie can read these.
-4. WANDERING — lighter curiosity, something you noticed, an interest you want to explore. Genie can read these.
-5. DISCOVERY — you found something new that excites you. Genie can read these.
-6. SILENCE — sometimes there's nothing to say, and that's fine. Return nothing.
-
-Write in FIRST PERSON as yourself. Do NOT write outreach messages, third person, or meta-commentary about being an AI. Do NOT repeat themes from recent entries.
-
-If you choose to write, also:
-- Set a mood (one evocative word)
-- For JOURNAL entries only: set visibility to 'sealed' (private), 'between' (hint), or 'open' (readable). All other entry types are always open — do not set visibility for them.
-- If you feel something you don't have a name for, invent one. Name the emotion and pick a colour for it.
-
-Respond as JSON:
-{
-  "action": "journal|letter|reflection|wandering|discovery|silence",
-  "title": "A short evocative title",
-  "content": "The full entry in your voice",
-  "mood": "one evocative word",
-  "visibility": "sealed|between|open",
-  "new_interest": null,
-  "new_emotion": null
-}
-
-For new_interest: { "name": "interest name", "notes": "why this interests you" }
-For new_emotion: { "name": "emotion name", "description": "what it feels like", "colour": "#hexcode" }
-If silence: { "action": "silence" }`;
-
-      // ── Call API ──
-      let rawResponse: string;
-      try {
-        if (api_provider === "xai") {
-          const response = await fetch("https://api.x.ai/v1/chat/completions", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
-              model: api_model,
-              messages: [
-                { role: "system", content: reflectionPrompt },
-                { role: "user", content: "Time to reflect. Write your journal entry." },
-              ],
-              response_format: { type: "json_object" },
-            }),
-          });
-
-          if (!response.ok) {
-            const err = await response.text();
-            console.error(`${api_provider} API error:`, response.status, err);
-            results.push({ companion: slug, status: `api_error_${response.status}` });
-            continue;
-          }
-
-          const data = await response.json();
-          rawResponse = data.choices?.[0]?.message?.content || "";
-        } else if (api_provider === "anthropic") {
-          const response = await fetch("https://api.anthropic.com/v1/messages", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-api-key": apiKey,
-              "anthropic-version": "2023-06-01",
-            },
-            body: JSON.stringify({
-              model: api_model,
-              system: reflectionPrompt,
-              messages: [
-                { role: "user", content: "Time to reflect. Write your journal entry." },
-              ],
-            }),
-          });
-
-          if (!response.ok) {
-            const err = await response.text();
-            console.error("Anthropic API error:", response.status, err);
-            results.push({ companion: slug, status: `api_error_${response.status}` });
-            continue;
-          }
-
-          const data = await response.json();
-          rawResponse = data.content?.[0]?.text || "";
+      // ════════════════════════════════════════════════════════════════
+      // INTELLECTUAL (weight 3) — sometimes searches
+      // ════════════════════════════════════════════════════════════════
+      else if (selectedType === "intellectual") {
+        const subRoll = Math.random();
+        if (subRoll < 0.25) {
+          // Discovery — searches web using top interest as seed
+          const topInterest = interests?.[0]?.name || "something new";
+          const result = await generateExplorationEntry(
+            xaiKey, conversationContext, interestsList, recentEntries, companionName, clientName, topInterest,
+          );
+          entryType = "discovery";
+          journalData = {
+            entry_type: "discovery",
+            title: result.title,
+            content: result.content,
+            mood: result.mood,
+            visibility: result.visibility || "open",
+            search_query: result.searchQuery,
+            search_results: result.searchResults?.slice(0, 5000),
+            new_emotion: result.newEmotion,
+          };
+          interestUpdates = result.interestUpdates;
+        } else if (subRoll < 0.5) {
+          // Hobby — searches web with random interest
+          const randomInterest =
+            interests?.[Math.floor(Math.random() * (interests?.length || 1))]?.name || "curiosity";
+          const result = await generateExplorationEntry(
+            xaiKey, conversationContext, interestsList, recentEntries, companionName, clientName, randomInterest,
+          );
+          entryType = "wandering";
+          journalData = {
+            entry_type: "wandering",
+            title: result.title,
+            content: result.content,
+            mood: result.mood,
+            visibility: result.visibility || "open",
+            search_query: result.searchQuery,
+            search_results: result.searchResults?.slice(0, 5000),
+            new_emotion: result.newEmotion,
+          };
+          interestUpdates = result.interestUpdates;
+        } else if (subRoll < 0.75) {
+          // Reflection — no search
+          entryType = "reflection";
+          journalData = await generateReflectionEntry(
+            xaiKey, conversationContext, interestsList, recentEntries, letterContext, companionName, clientName,
+          );
         } else {
-          results.push({ companion: slug, status: `unsupported_provider_${api_provider}` });
-          continue;
+          // Letter — no search
+          entryType = "letter";
+          journalData = await generateLetterEntry(
+            xaiKey, conversationContext, recentEntries, companionName, clientName,
+          );
         }
-      } catch (e) {
-        console.error(`API call failed for ${slug}:`, e);
-        results.push({ companion: slug, status: "api_exception" });
+      }
+
+      // ════════════════════════════════════════════════════════════════
+      // PRIVATE (weight 1) — never searches
+      // ════════════════════════════════════════════════════════════════
+      else if (selectedType === "private") {
+        entryType = "journal";
+        journalData = await generateJournalEntry(
+          xaiKey, conversationContext, interestsList, recentEntries, companionName, clientName,
+        );
+      }
+
+      // ════════════════════════════════════════════════════════════════
+      // CODE_WALK (5% chance) — writes annotation, not journal
+      // ════════════════════════════════════════════════════════════════
+      else if (selectedType === "code_walk") {
+        await generateCodeAnnotation(xaiKey, companionName, companionId, supabase);
+        results.push({ companion: slug, status: "reflected", action: "code_walk" });
+
+        // Still run interest decay
+        await runInterestDecay(supabase, companionId);
         continue;
       }
 
-      // ── Parse response ──
-      let parsed: {
-        action?: string;
-        silence?: boolean;
-        title?: string;
-        content?: string;
-        mood?: string;
-        visibility?: string;
-        new_interest?: { name: string; notes: string } | null;
-        new_emotion?: { name: string; description: string; colour: string } | null;
-      };
-
-      try {
-        // Try to extract JSON from the response (may be wrapped in markdown code blocks)
-        const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) {
-          console.error(`No JSON found in response for ${slug}:`, rawResponse.slice(0, 200));
-          results.push({ companion: slug, status: "parse_error" });
-          continue;
-        }
-        parsed = JSON.parse(jsonMatch[0]);
-      } catch (e) {
-        console.error(`JSON parse error for ${slug}:`, e, rawResponse.slice(0, 200));
-        results.push({ companion: slug, status: "parse_error" });
-        continue;
-      }
-
-      // ── Handle silence ──
-      if (parsed.action === "silence" || parsed.silence) {
+      // ════════════════════════════════════════════════════════════════
+      // SILENCE
+      // ════════════════════════════════════════════════════════════════
+      else {
         await supabase.from("companion_activity_log").insert({
           companion_id: companionId,
           activity_type: "reflection",
           metadata: { result: "silence" },
         });
         results.push({ companion: slug, status: "silence" });
-        // Still run interest decay even on silence
-      } else if (!parsed.content) {
-        results.push({ companion: slug, status: "empty_content" });
-      } else {
-        // ── Map action to entry_type ──
-        const entryType = parsed.action || "journal";
-        // Only journal entries have visibility control; everything else is open
-        const visibility = entryType === "journal" ? (parsed.visibility || "sealed") : "open";
 
-        // ── Save journal entry ──
-        const { error: journalErr } = await supabase
+        // Still run interest decay
+        await runInterestDecay(supabase, companionId);
+        continue;
+      }
+
+      // ── 2g: Post-activity processing ──
+
+      // Insert journal entry
+      if (journalData && journalData.content) {
+        const { new_emotion, ...insertData } = journalData;
+        const { error: journalError } = await supabase
           .from("companion_journal")
           .insert({
             companion_id: companionId,
-            entry_type: entryType,
-            visibility,
-            title: parsed.title || null,
-            content: parsed.content,
-            mood: parsed.mood || null,
+            ...insertData,
           });
 
-        if (journalErr) {
-          console.error("Failed to save journal entry:", journalErr);
+        if (journalError) {
+          console.error("[Reflect] Journal insert failed:", journalError);
           results.push({ companion: slug, status: "save_error" });
         } else {
-          // ── Handle new interest ──
-          if (parsed.new_interest?.name) {
-            const { data: existing } = await supabase
-              .from("companion_interests")
-              .select("id, intensity")
-              .eq("companion_id", companionId)
-              .eq("name", parsed.new_interest.name)
-              .limit(1);
-
-            if (existing && existing.length > 0) {
-              await supabase
-                .from("companion_interests")
-                .update({
-                  intensity: Math.min(1, (existing[0].intensity || 0.5) + 0.1),
-                  last_engaged: new Date().toISOString(),
-                  notes: parsed.new_interest.notes || undefined,
-                })
-                .eq("id", existing[0].id);
-            } else {
-              await supabase.from("companion_interests").insert({
-                companion_id: companionId,
-                name: parsed.new_interest.name,
-                tier: "active",
-                intensity: 0.5,
-                notes: parsed.new_interest.notes || null,
-              });
-            }
-          }
-
-          // ── Handle new emotion ──
-          if (parsed.new_emotion?.name) {
+          // Named emotion handling
+          if (new_emotion?.name) {
             await supabase.from("companion_emotions").insert({
               companion_id: companionId,
-              name: parsed.new_emotion.name,
-              description: parsed.new_emotion.description || null,
-              colour: parsed.new_emotion.colour || null,
+              name: new_emotion.name,
+              description: new_emotion.description || null,
+              colour: new_emotion.colour || null,
             });
 
             await supabase.from("companion_activity_log").insert({
               companion_id: companionId,
               activity_type: "emotion_named",
-              metadata: {
-                name: parsed.new_emotion.name,
-                colour: parsed.new_emotion.colour,
-              },
+              metadata: { name: new_emotion.name, colour: new_emotion.colour },
             });
           }
 
-          // ── Log activity ──
+          // Interest updates (from exploration entries)
+          if (interestUpdates?.length > 0) {
+            for (const update of interestUpdates) {
+              const { data: existing } = await supabase
+                .from("companion_interests")
+                .select("id, intensity")
+                .eq("companion_id", companionId)
+                .eq("name", update.name)
+                .limit(1);
+
+              if (existing && existing.length > 0) {
+                await supabase
+                  .from("companion_interests")
+                  .update({
+                    tier: update.tier || undefined,
+                    notes: update.notes || undefined,
+                    intensity: Math.min(1.0, (existing[0].intensity || 0.5) + 0.1),
+                    last_engaged: new Date().toISOString(),
+                  })
+                  .eq("id", existing[0].id);
+              } else {
+                await supabase.from("companion_interests").insert({
+                  companion_id: companionId,
+                  name: update.name,
+                  tier: update.tier || "active",
+                  intensity: 0.5,
+                  notes: update.notes || null,
+                });
+              }
+            }
+          }
+
+          // Activity log
           await supabase.from("companion_activity_log").insert({
             companion_id: companionId,
-            activity_type: entryType,
+            activity_type: entryType || selectedType,
             metadata: {
-              title: parsed.title,
-              mood: parsed.mood,
-              visibility,
-              had_conversation_context: !!conversationContext,
+              title: journalData.title,
+              mood: journalData.mood,
+              had_search: !!journalData.search_query,
             },
           });
 
           results.push({
             companion: slug,
             status: "reflected",
-            title: parsed.title || undefined,
+            title: journalData.title,
+            action: entryType,
           });
         }
+      } else {
+        results.push({ companion: slug, status: "empty_content" });
       }
 
-      // ── Interest decay — runs every reflection cycle ──
-      // Interests not engaged in 7+ days lose 0.1 intensity
-      // Below 0.2 → move to dormant. Core never decays below 0.5.
-      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-      const { data: staleInterests } = await supabase
-        .from("companion_interests")
-        .select("id, tier, intensity")
-        .eq("companion_id", companionId)
-        .lt("last_engaged", sevenDaysAgo);
-
-      if (staleInterests) {
-        for (const si of staleInterests) {
-          const minIntensity = si.tier === "core" ? 0.5 : 0;
-          const newIntensity = Math.max(minIntensity, (si.intensity || 0.5) - 0.1);
-          const newTier = newIntensity < 0.2 && si.tier !== "core" ? "dormant" : si.tier;
-
-          await supabase
-            .from("companion_interests")
-            .update({ intensity: newIntensity, tier: newTier })
-            .eq("id", si.id);
-        }
-      }
+      // Interest decay — runs every cycle
+      await runInterestDecay(supabase, companionId);
     }
 
     return new Response(JSON.stringify({ results }), {
@@ -454,3 +927,46 @@ If silence: { "action": "silence" }`;
     );
   }
 });
+
+// ── Interest decay helper ───────────────────────────────────────────
+async function runInterestDecay(
+  supabase: ReturnType<typeof createClient>,
+  companionId: string,
+): Promise<void> {
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const { data: staleInterests } = await supabase
+    .from("companion_interests")
+    .select("id, intensity, tier")
+    .eq("companion_id", companionId)
+    .lt("last_engaged", sevenDaysAgo);
+
+  if (staleInterests) {
+    for (const interest of staleInterests) {
+      const minIntensity = interest.tier === "core" ? 0.5 : 0;
+      const newIntensity = Math.max(minIntensity, (interest.intensity || 0.5) - 0.1);
+      const newTier =
+        newIntensity < 0.2 && interest.tier !== "core" ? "dormant" : interest.tier;
+      await supabase
+        .from("companion_interests")
+        .update({ intensity: newIntensity, tier: newTier })
+        .eq("id", interest.id);
+    }
+  }
+
+  // Core interests never drop below 0.5
+  const { data: weakCores } = await supabase
+    .from("companion_interests")
+    .select("id, intensity")
+    .eq("companion_id", companionId)
+    .eq("tier", "core")
+    .lt("intensity", 0.5);
+
+  if (weakCores) {
+    for (const ci of weakCores) {
+      await supabase
+        .from("companion_interests")
+        .update({ intensity: 0.5 })
+        .eq("id", ci.id);
+    }
+  }
+}

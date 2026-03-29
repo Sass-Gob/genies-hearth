@@ -12,6 +12,7 @@ interface JournalEntry {
   title: string | null;
   content: string;
   mood: string | null;
+  search_query: string | null;
   created_at: string;
 }
 
@@ -110,7 +111,10 @@ function EntryCard({ entry }: { entry: JournalEntry }) {
   return (
     <div className="entry-card">
       <div className="entry-header">
-        <span className="entry-title">{entry.title || 'Untitled'}</span>
+        <span className="entry-title">
+          {entry.search_query && <span className="entry-search-icon" title={`Searched: ${entry.search_query}`}>🔍 </span>}
+          {entry.title || 'Untitled'}
+        </span>
         {entry.mood && <span className="entry-mood" style={{ color: moodColor(entry.mood) }}>{entry.mood}</span>}
       </div>
       <div className="entry-content">{entry.content}</div>
@@ -143,7 +147,8 @@ export default function RavensNook({ onBack }: Props) {
 
       setEntries((journalRes.data as any[] || []).map((e) => ({
         id: e.id, entry_type: e.entry_type, visibility: e.visibility || 'open',
-        title: e.title, content: e.content, mood: e.mood, created_at: e.created_at,
+        title: e.title, content: e.content, mood: e.mood,
+        search_query: e.search_query || null, created_at: e.created_at,
       })));
 
       setInterests((interestsRes.data as any[] || []).map((i) => ({
@@ -274,6 +279,9 @@ export default function RavensNook({ onBack }: Props) {
         .entry-date {
           font-size: 11px; color: var(--text-faint); opacity: 0.6; margin-top: 8px;
         }
+
+        /* Search indicator */
+        .entry-search-icon { font-size: 13px; opacity: 0.7; }
 
         /* Sealed entries */
         .sealed-entry { opacity: 0.5; }
