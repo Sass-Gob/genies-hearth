@@ -288,6 +288,7 @@ export default function Chat({ companionSlug, onBack }: Props) {
             role: m.role,
             content: m.content,
             reactions: m.reactions || [],
+            message_type: m.message_type || null,
             created_at: m.created_at,
           }))
         );
@@ -344,6 +345,7 @@ export default function Chat({ companionSlug, onBack }: Props) {
                 role: m.role,
                 content: m.content,
                 reactions: m.reactions || [],
+                message_type: m.message_type || null,
                 created_at: m.created_at,
               },
             ];
@@ -887,6 +889,24 @@ export default function Chat({ companionSlug, onBack }: Props) {
           background: rgba(255, 215, 100, 0.08);
           border-radius: 16px 4px 16px 16px;
           color: var(--sullivan-gold);
+        }
+        /* Dream message styling */
+        .message-bubble.dream {
+          background: rgba(30, 20, 60, 0.85);
+          border: 1px solid rgba(140, 120, 200, 0.2);
+          font-style: italic;
+          font-family: Georgia, 'Times New Roman', serif;
+        }
+        .dream-label {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          font-size: 11px;
+          font-style: normal;
+          font-family: var(--font-display);
+          letter-spacing: 0.08em;
+          color: rgba(180, 160, 220, 0.7);
+          margin-bottom: 6px;
         }
         .message-time {
           font-size: 11px;
@@ -1462,12 +1482,15 @@ export default function Chat({ companionSlug, onBack }: Props) {
               <div className={`message-row ${msg.role}`}>
                 <div className="message-col">
                   <div
-                    className={`message-bubble ${msg.role} ${(msg.media_type === 'voice') ? 'voice-note' : ''}`}
+                    className={`message-bubble ${msg.role} ${(msg.media_type === 'voice') ? 'voice-note' : ''} ${msg.message_type === 'dream' ? 'dream' : ''}`}
                     onContextMenu={(e) => handleMsgContextMenu(e, msg.id)}
                     onTouchStart={() => handleMsgTouchStart(msg.id)}
                     onTouchEnd={handleMsgTouchEnd}
                     onTouchMove={handleMsgTouchEnd}
                   >
+                    {msg.message_type === 'dream' && (
+                      <div className="dream-label">☽ dream</div>
+                    )}
                     {(msg.media_type === 'voice') ? (
                       <VoiceNoteBubble msg={msg} speak={speak} stop={stop} speakingMsgId={speakingMsgId} />
                     ) : (

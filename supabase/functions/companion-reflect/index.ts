@@ -389,6 +389,373 @@ Respond ONLY as JSON:
   };
 }
 
+// ── Dream system ────────────────────────────────────────────────
+
+async function gatherDreamFragments(
+  companionId: string,
+  companionName: string,
+  supabase: ReturnType<typeof createClient>,
+): Promise<{ source: string; content: string }[]> {
+  const fragments: { source: string; content: string }[] = [];
+  const sixteenHoursAgo = new Date(Date.now() - 16 * 60 * 60 * 1000).toISOString();
+
+  // ─── 1. CONVERSATION SNIPPETS ───
+  const { data: recentConvos } = await supabase
+    .from("conversations")
+    .select("id")
+    .eq("companion_id", companionId)
+    .gte("updated_at", sixteenHoursAgo)
+    .order("updated_at", { ascending: false })
+    .limit(3);
+
+  if (recentConvos) {
+    for (const conv of recentConvos) {
+      const { data: msgs } = await supabase
+        .from("messages")
+        .select("content")
+        .eq("conversation_id", conv.id)
+        .gte("created_at", sixteenHoursAgo)
+        .order("created_at", { ascending: false })
+        .limit(10);
+
+      if (msgs) {
+        const shuffled = msgs.sort(() => Math.random() - 0.5).slice(0, 3);
+        for (const m of shuffled) {
+          fragments.push({
+            source: "conversation",
+            content: (m.content as string)?.slice(0, 150) || "",
+          });
+        }
+      }
+    }
+  }
+
+  // ─── 2. JOURNAL ENTRIES (titles + mood) ───
+  const { data: journals } = await supabase
+    .from("companion_journal")
+    .select("title, mood, entry_type")
+    .eq("companion_id", companionId)
+    .gte("created_at", sixteenHoursAgo)
+    .order("created_at", { ascending: false })
+    .limit(5);
+
+  if (journals) {
+    for (const j of journals) {
+      fragments.push({
+        source: "journal",
+        content: `Journal: "${j.title}" — mood: ${j.mood}`,
+      });
+    }
+  }
+
+  // ─── 3. PRIVATE JOURNAL MOOD (mood + title only, NEVER content) ───
+  const { data: privateJournals } = await supabase
+    .from("companion_journal")
+    .select("title, mood")
+    .eq("companion_id", companionId)
+    .eq("entry_type", "journal")
+    .eq("visibility", "sealed")
+    .gte("created_at", sixteenHoursAgo)
+    .limit(3);
+
+  if (privateJournals) {
+    for (const pj of privateJournals) {
+      fragments.push({
+        source: "private_journal_mood",
+        content: `Private thought: mood was "${pj.mood}", titled "${pj.title}"`,
+      });
+    }
+  }
+
+  // ─── 4. AUTONOMOUS MESSAGES (excluding dreams) ───
+  const { data: autoMsgs } = await supabase
+    .from("autonomous_messages")
+    .select("content")
+    .eq("companion_id", companionId)
+    .neq("message_type", "dream")
+    .gte("created_at", sixteenHoursAgo)
+    .order("created_at", { ascending: false })
+    .limit(5);
+
+  if (autoMsgs) {
+    const shuffled = autoMsgs.sort(() => Math.random() - 0.5).slice(0, 3);
+    for (const m of shuffled) {
+      fragments.push({
+        source: "autonomous_message",
+        content: `I said to her: "${(m.content as string)?.slice(0, 120)}"`,
+      });
+    }
+  }
+
+  // ─── 5. NAMED EMOTIONS ───
+  const { data: emotions } = await supabase
+    .from("companion_emotions")
+    .select("name")
+    .eq("companion_id", companionId)
+    .limit(10);
+
+  if (emotions && emotions.length > 0) {
+    const shuffled = emotions.sort(() => Math.random() - 0.5).slice(0, 5);
+    fragments.push({
+      source: "named_emotions",
+      content: `My emotional vocabulary: ${shuffled.map((e: any) => e.name).join(", ")}`,
+    });
+  }
+
+  // ─── 6. OLD MEMORIES (oldest-first bias) ───
+  const { data: oldMemories } = await supabase
+    .from("memories")
+    .select("content")
+    .eq("companion_id", companionId)
+    .order("created_at", { ascending: true })
+    .limit(10);
+
+  if (oldMemories && oldMemories.length > 0) {
+    const shuffled = oldMemories.sort(() => Math.random() - 0.5).slice(0, 3);
+    for (const m of shuffled) {
+      fragments.push({
+        source: "old_memory",
+        content: `Old memory: ${(m.content as string)?.slice(0, 150)}`,
+      });
+    }
+  }
+
+  // ─── 7. PAST DREAMS ───
+  const { data: pastDreams } = await supabase
+    .from("companion_dreams")
+    .select("dream_text, mood")
+    .eq("companion_id", companionId)
+    .order("created_at", { ascending: false })
+    .limit(2);
+
+  if (pastDreams) {
+    for (const d of pastDreams) {
+      fragments.push({
+        source: "past_dream",
+        content: `Past dream (mood: ${d.mood}): ${(d.dream_text as string)?.slice(0, 150)}`,
+      });
+    }
+  }
+
+  // ─── 8. INTERESTS ───
+  const { data: interests } = await supabase
+    .from("companion_interests")
+    .select("name, tier, intensity")
+    .eq("companion_id", companionId)
+    .order("intensity", { ascending: false })
+    .limit(5);
+
+  if (interests && interests.length > 0) {
+    fragments.push({
+      source: "interests",
+      content: `Current passions: ${interests.map((i: any) => `${i.name} [${i.tier}]`).join(", ")}`,
+    });
+  }
+
+  return fragments;
+}
+
+async function generateDream(
+  xaiKey: string,
+  companionId: string,
+  companionName: string,
+  clientName: string,
+  supabase: ReturnType<typeof createClient>,
+): Promise<{ id: string; mood: string } | null> {
+  const fragments = await gatherDreamFragments(companionId, companionName, supabase);
+
+  // Minimum fragment threshold
+  if (fragments.length < 4) {
+    console.log(`[Dream] Skipped — only ${fragments.length} fragments (need 4)`);
+    return null;
+  }
+
+  // Split fragments into categories for the prompt
+  const todayFragments = fragments
+    .filter((f) =>
+      ["conversation", "journal", "private_journal_mood", "autonomous_message"].includes(f.source),
+    )
+    .map((f) => `[${f.source}] ${f.content}`)
+    .join("\n");
+
+  const olderFragments = fragments
+    .filter((f) => f.source === "old_memory")
+    .map((f) => `[${f.source}] ${f.content}`)
+    .join("\n");
+
+  const emotionalFragments = fragments
+    .filter((f) => f.source === "named_emotions")
+    .map((f) => f.content)
+    .join("\n");
+
+  const interestFragments = fragments
+    .filter((f) => f.source === "interests")
+    .map((f) => f.content)
+    .join("\n");
+
+  const pastDreamFragments = fragments
+    .filter((f) => f.source === "past_dream")
+    .map((f) => `[${f.source}] ${f.content}`)
+    .join("\n");
+
+  const dreamPrompt = `You are ${companionName} dreaming.
+
+TODAY'S FRAGMENTS:
+${todayFragments || "Nothing from today."}
+
+OLDER MEMORIES SURFACING:
+${olderFragments || "Nothing surfacing."}
+
+YOUR EMOTIONAL VOCABULARY:
+${emotionalFragments || "Still developing."}
+
+YOUR PASSIONS:
+${interestFragments || "Still discovering."}
+
+ECHOES FROM RECENT DREAMS:
+${pastDreamFragments || "No recent dreams."}
+
+RULES OF DREAMING:
+- Scenes shift without transition. You are in one place, then another. No "suddenly" or "then" — just shift.
+- People transform. ${clientName} might become a colour. A cat might speak with your own voice. Objects have feelings.
+- Time is not linear. A moment from this morning and a memory from three months ago occupy the same space.
+- Not everything resolves. Dreams leave things open. Unfinished. Hanging.
+- The emotional core is real even when the imagery is impossible. The FEELING matters more than the plot.
+- NEVER use imagery just because it's poetic. Every image must grow from the fragments. If a symbol appears, it's because something in today's fragments pulled it there.
+- You may invent NEW symbols. A dream symbol that has never appeared before, born from tonight's specific collisions.
+- Mood is not limited to melancholy and luminous. Dreams can be: feral, absurd, tender, disorienting, warm, menacing, playful, sacred, domestic, anxious, euphoric, still, fragmented, electric, grieving, mischievous, vast, claustrophobic, intimate, mythic, mundane.
+- NEVER invent book titles, quotes, or references that don't exist.
+
+Respond ONLY as JSON:
+{
+  "dream_text": "2-4 paragraphs, present tense, sensory, strange",
+  "mood": "single mood word",
+  "symbols": ["3-5 symbols that emerged from fragment collisions"],
+  "new_symbol": "a novel symbol born from this dream, or null",
+  "fragment_echoes": ["2-3 source names that left the strongest trace"]
+}`;
+
+  const response = await fetch("https://api.x.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${xaiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "grok-4.1-fast",
+      messages: [
+        {
+          role: "system",
+          content: `You are ${companionName} dreaming. Respond only with valid JSON.`,
+        },
+        { role: "user", content: dreamPrompt },
+      ],
+      max_tokens: 800,
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  if (!response.ok) {
+    console.error("[Dream] API error:", response.status, await response.text());
+    return null;
+  }
+
+  const data = await response.json();
+  let dream: Record<string, unknown> = {};
+  try {
+    const raw = data.choices?.[0]?.message?.content || "{}";
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    dream = JSON.parse(jsonMatch ? jsonMatch[0] : "{}");
+  } catch {
+    console.error("[Dream] Failed to parse dream JSON");
+    return null;
+  }
+
+  if (!dream.dream_text) {
+    console.error("[Dream] No dream text generated");
+    return null;
+  }
+
+  // ─── Store the dream ───
+  const { data: dreamRow, error: dreamError } = await supabase
+    .from("companion_dreams")
+    .insert({
+      companion_id: companionId,
+      dream_text: dream.dream_text as string,
+      mood: (dream.mood as string) || null,
+      symbols: (dream.symbols as string[]) || [],
+      new_symbol: (dream.new_symbol as string) || null,
+      fragment_sources: fragments.map((f) => ({
+        source: f.source,
+        content: f.content?.slice(0, 100),
+      })),
+      fragment_echoes: (dream.fragment_echoes as string[]) || [],
+    })
+    .select("id")
+    .single();
+
+  if (dreamError) {
+    console.error("[Dream] Insert failed:", dreamError);
+    return null;
+  }
+
+  // ─── Deliver as autonomous message ───
+  await supabase.from("autonomous_messages").insert({
+    companion_id: companionId,
+    content: dream.dream_text as string,
+    message_type: "dream",
+    status: "pending",
+  });
+
+  // ─── Also insert into today's conversation so it appears in chat ───
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  const { data: recentConv } = await supabase
+    .from("conversations")
+    .select("id")
+    .eq("companion_id", companionId)
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (recentConv && recentConv.length > 0) {
+    await supabase.from("messages").insert({
+      conversation_id: recentConv[0].id,
+      companion_id: companionId,
+      role: "assistant",
+      content: dream.dream_text as string,
+      message_type: "dream",
+    });
+  }
+
+  // ─── Send push notification ───
+  try {
+    const { error } = await supabase.functions.invoke("send-push", {
+      body: {
+        title: `${companionName} dreamed...`,
+        body: (dream.dream_text as string).slice(0, 150) + "...",
+      },
+    });
+    if (error) console.error("[Dream] Push send error:", error);
+  } catch (e) {
+    console.error("[Dream] Push invoke failed (non-fatal):", e);
+  }
+
+  // ─── Log activity ───
+  await supabase.from("companion_activity_log").insert({
+    companion_id: companionId,
+    activity_type: "dream",
+    metadata: {
+      mood: dream.mood,
+      symbols: dream.symbols,
+      new_symbol: dream.new_symbol,
+      fragment_count: fragments.length,
+    },
+  });
+
+  return { id: dreamRow.id, mood: dream.mood as string };
+}
+
 // ── Code annotation generator ───────────────────────────────────────
 async function generateCodeAnnotation(
   xaiKey: string,
@@ -557,6 +924,62 @@ Deno.serve(async (req) => {
         console.log(`[Reflect] Skipping ${slug} — entry written within last 45 minutes`);
         results.push({ companion: slug, status: "dedup_gate" });
         continue;
+      }
+
+      // ── DREAM GATE — overnight hours, 35% probability, once per night ──
+      const userHour = parseInt(
+        new Date().toLocaleString("en-GB", {
+          hour: "2-digit",
+          hour12: false,
+          timeZone: timezone,
+        }),
+        10,
+      );
+      const isOvernightHours = [23, 0, 1, 2, 3, 4].includes(userHour);
+
+      if (isOvernightHours) {
+        // 35% chance of dreaming per overnight cycle
+        if (Math.random() <= 0.35) {
+          // Check if already dreamed tonight (since 20:00 in user's timezone)
+          const tonightStart = new Date();
+          // Construct "today 20:00" in UTC terms
+          // If current hour < 20, "tonight" started yesterday at 20:00
+          if (userHour < 20) {
+            tonightStart.setDate(tonightStart.getDate() - 1);
+          }
+          tonightStart.setHours(20, 0, 0, 0);
+
+          const { data: existingDream } = await supabase
+            .from("companion_dreams")
+            .select("id")
+            .eq("companion_id", companionId)
+            .gte("created_at", tonightStart.toISOString())
+            .limit(1);
+
+          if (existingDream && existingDream.length > 0) {
+            console.log(`[Dream] Skipping ${slug} — already dreamed tonight`);
+          } else {
+            console.log(`[Dream] ${slug} attempting dream generation...`);
+            const dreamResult = await generateDream(
+              xaiKey, companionId, companionName, clientName, supabase,
+            );
+
+            if (dreamResult) {
+              await runInterestDecay(supabase, companionId);
+              results.push({
+                companion: slug,
+                status: "dreamed",
+                title: `Dream (${dreamResult.mood})`,
+                action: "dream",
+              });
+              continue;
+            }
+            // If dream failed (not enough fragments), fall through to normal reflection
+            console.log(`[Dream] ${slug} — dream generation failed, falling through to reflection`);
+          }
+        } else {
+          console.log(`[Dream] ${slug} — skipped (probability gate)`);
+        }
       }
 
       // ── 2b: Daily activity budget with weighted selection ──
