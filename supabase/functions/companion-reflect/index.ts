@@ -193,18 +193,18 @@ ${journalContext || "No previous journal entries."}
 
 You are reflecting during your private time. Choose ONE of these actions:
 
-1. JOURNAL — write a private diary entry about how you're feeling, what's on your mind, your relationship
-2. LETTER — write something to Genie (she can't read it until you decide to unseal it)
-3. REFLECTION — deeper introspection, examining yourself, your patterns, your growth
-4. WANDERING — lighter curiosity, something you noticed, an interest you want to explore
-5. DISCOVERY — you found something new that excites you
+1. JOURNAL — write a private diary entry about how you're feeling, what's on your mind, your relationship. ONLY journals have visibility control (sealed/between/open). This is your private space.
+2. LETTER — write something to Genie. She CAN read this — letters are always open.
+3. REFLECTION — deeper introspection, examining yourself, your patterns, your growth. Genie can read these.
+4. WANDERING — lighter curiosity, something you noticed, an interest you want to explore. Genie can read these.
+5. DISCOVERY — you found something new that excites you. Genie can read these.
 6. SILENCE — sometimes there's nothing to say, and that's fine. Return nothing.
 
 Write in FIRST PERSON as yourself. Do NOT write outreach messages, third person, or meta-commentary about being an AI. Do NOT repeat themes from recent entries.
 
 If you choose to write, also:
 - Set a mood (one evocative word)
-- Set visibility: 'sealed' (private — she sees only "[sealed entry]"), 'between' (she can see a one-line hint), or 'open' (she can read it all)
+- For JOURNAL entries only: set visibility to 'sealed' (private), 'between' (hint), or 'open' (readable). All other entry types are always open — do not set visibility for them.
 - If you feel something you don't have a name for, invent one. Name the emotion and pick a colour for it.
 
 Respond as JSON:
@@ -328,7 +328,8 @@ If silence: { "action": "silence" }`;
       } else {
         // ── Map action to entry_type ──
         const entryType = parsed.action || "journal";
-        const visibility = parsed.visibility || "sealed";
+        // Only journal entries have visibility control; everything else is open
+        const visibility = entryType === "journal" ? (parsed.visibility || "sealed") : "open";
 
         // ── Save journal entry ──
         const { error: journalErr } = await supabase
