@@ -642,7 +642,7 @@ Respond ONLY as JSON:
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "grok-4.1-fast",
+      model: "grok-3-fast",
       messages: [
         {
           role: "system",
@@ -942,8 +942,6 @@ Deno.serve(async (req) => {
         if (Math.random() <= 0.35) {
           // Check if already dreamed tonight (since 20:00 in user's timezone)
           const tonightStart = new Date();
-          // Construct "today 20:00" in UTC terms
-          // If current hour < 20, "tonight" started yesterday at 20:00
           if (userHour < 20) {
             tonightStart.setDate(tonightStart.getDate() - 1);
           }
@@ -974,7 +972,6 @@ Deno.serve(async (req) => {
               });
               continue;
             }
-            // If dream failed (not enough fragments), fall through to normal reflection
             console.log(`[Dream] ${slug} — dream generation failed, falling through to reflection`);
           }
         } else {
