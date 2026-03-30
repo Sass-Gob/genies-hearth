@@ -108,8 +108,10 @@ export default function RavensNook({ onBack }: Props) {
   const [breakingId, setBreakingId] = useState<string | null>(null);
 
   useEffect(() => {
+    let isFirst = true;
+
     async function load() {
-      setLoading(true);
+      if (isFirst) setLoading(true);
 
       const [journalRes, dreamsRes, interestsRes, emotionsRes, annotationsRes, activityRes] = await Promise.all([
         supabase.from('companion_journal' as any).select('*').order('created_at', { ascending: false }).limit(100),
@@ -155,9 +157,15 @@ export default function RavensNook({ onBack }: Props) {
         metadata: a.metadata || {}, created_at: a.created_at,
       })));
 
-      setLoading(false);
+      if (isFirst) {
+        setLoading(false);
+        isFirst = false;
+      }
     }
+
     load();
+    const interval = setInterval(load, 60000);
+    return () => clearInterval(interval);
   }, []);
 
   const filterEntries = (types: string[]) => entries.filter((e) => types.includes(e.entry_type));
