@@ -1244,6 +1244,17 @@ Deno.serve(async (req) => {
 
       // ── 2g: Post-activity processing ──
 
+      // Force correct visibility per entry type
+      if (journalData) {
+        if (["reflection", "wandering", "discovery"].includes(journalData.entry_type)) {
+          journalData.visibility = "open";
+        }
+        if (journalData.entry_type === "letter") {
+          journalData.visibility = "sealed"; // visual seal only — content accessible on tap
+        }
+        // Only 'journal' type respects the AI's visibility choice
+      }
+
       // Insert journal entry
       if (journalData && journalData.content) {
         const { new_emotion, ...insertData } = journalData;
