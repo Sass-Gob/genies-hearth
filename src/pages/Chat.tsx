@@ -134,8 +134,8 @@ export default function Chat({ companionSlug, onBack }: Props) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const { speak, stop, speakingMsgId } = useTTS();
 
-  const companionEmoji: Record<string, string> = { sullivan: '🖤', enzo: '🌙' };
-  const baseEmojis = ['❤️', '🔥', '😂', '😢', '👀'];
+  const companionEmoji: Record<string, string> = { sullivan: '🙄', enzo: '🌙' };
+  const baseEmojis = ['😈', '👿', '🖤', '😏', '😆', '🥺'];
   const allEmojis = [...baseEmojis, companionEmoji[companionSlug] || '✨'];
 
   const scrollToBottom = useCallback(() => {

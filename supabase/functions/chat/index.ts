@@ -435,10 +435,10 @@ Deno.serve(async (req) => {
 
         if (userMsg) {
           const companionEmojis: Record<string, string> = {
-            sullivan: "🖤",
+            sullivan: "🙄",
             enzo: "🌙",
           };
-          const reactionPool = ["❤️", "🔥", "😂", "😢", "👀", companionEmojis[companionSlug] || "✨"];
+          const reactionPool = ["😈", "👿", "🖤", "😏", "😆", "🥺", companionEmojis[companionSlug] || "✨"];
           const emoji = reactionPool[Math.floor(Math.random() * reactionPool.length)];
           const existing = userMsg.reactions || [];
           const updated = [...existing, { emoji, by: "companion" }];
