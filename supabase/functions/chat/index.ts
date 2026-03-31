@@ -391,7 +391,7 @@ Deno.serve(async (req) => {
           api_model,
           enrichedSystemPrompt,
           chatHistory,
-          3000,
+          5000,
         );
         break;
 
