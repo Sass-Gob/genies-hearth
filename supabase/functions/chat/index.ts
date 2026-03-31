@@ -147,7 +147,7 @@ async function callXai(
       .map((m) => ({ role: m.role, content: m.content })),
   ];
 
-  const body: Record<string, unknown> = { model, messages: apiMessages };
+  const body: Record<string, unknown> = { model, messages: apiMessages, temperature: 0.85 };
   if (maxTokens) body.max_tokens = maxTokens;
 
   const response = await fetch("https://api.x.ai/v1/chat/completions", {
@@ -391,7 +391,7 @@ Deno.serve(async (req) => {
           api_model,
           enrichedSystemPrompt,
           chatHistory,
-          5000,
+          3000,
         );
         break;
 
