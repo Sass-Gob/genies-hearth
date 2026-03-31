@@ -753,6 +753,55 @@ Respond ONLY as JSON:
     },
   });
 
+  // ─── Dream consolidation → constellation ───
+  try {
+    // If the dream has a new_symbol, create a meteor node
+    if (dream.new_symbol) {
+      const slug = `meteor-${(dream.new_symbol as string).toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+      await supabase.from("mindmap_nodes").upsert({
+        companion_id: companionId,
+        node_id: slug,
+        label: dream.new_symbol as string,
+        type: "meteor",
+        mood: (dream.mood as string) || null,
+        description: "Born from a dream",
+        recency: 1.0, claimed: 0.4, seen: false,
+      }, { onConflict: "companion_id,node_id" });
+
+      await supabase.from("mindmap_connections").upsert({
+        id: `genie--${slug}`,
+        companion_id: companionId,
+        source_node: "genie", target_node: slug,
+        strength: 0.4,
+      }, { onConflict: "id" });
+    }
+
+    // Boost constellation nodes mentioned in dream symbols
+    if (dream.symbols && Array.isArray(dream.symbols)) {
+      const { data: allNodes } = await supabase
+        .from("mindmap_nodes")
+        .select("id, label, recency, claimed")
+        .eq("companion_id", companionId);
+
+      if (allNodes) {
+        const dreamText = (dream.dream_text as string).toLowerCase();
+        for (const node of allNodes) {
+          if (dreamText.includes(node.label.toLowerCase())) {
+            await supabase.from("mindmap_nodes")
+              .update({
+                recency: Math.min(1.0, (node.recency || 0.5) + 0.1),
+                claimed: Math.min(1.0, (node.claimed || 0.5) + 0.03),
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", node.id);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.error("[Dream] Constellation consolidation failed (non-fatal):", e);
+  }
+
   return { id: dreamRow.id, mood: dream.mood as string };
 }
 
@@ -1283,6 +1332,26 @@ Deno.serve(async (req) => {
               activity_type: "emotion_named",
               metadata: { name: new_emotion.name, colour: new_emotion.colour },
             });
+
+            // Create constellation node for new emotion
+            const emotionSlug = `emotion-${new_emotion.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+            await supabase.from("mindmap_nodes").upsert({
+              companion_id: companionId,
+              node_id: emotionSlug,
+              label: new_emotion.name,
+              type: "emotion",
+              mood: new_emotion.name,
+              description: new_emotion.description || null,
+              recency: 1.0, claimed: 0.7, seen: true,
+              custom_color: new_emotion.colour || null,
+            }, { onConflict: "companion_id,node_id" });
+
+            await supabase.from("mindmap_connections").upsert({
+              id: `genie--${emotionSlug}`,
+              companion_id: companionId,
+              source_node: "genie", target_node: emotionSlug,
+              strength: 0.7,
+            }, { onConflict: "id" });
           }
 
           // Interest updates (from exploration entries)
@@ -1328,6 +1397,31 @@ Deno.serve(async (req) => {
             },
           });
 
+          // Boost constellation nodes mentioned in journal content
+          try {
+            const { data: conNodes } = await supabase
+              .from("mindmap_nodes")
+              .select("id, label, recency, claimed")
+              .eq("companion_id", companionId);
+
+            if (conNodes && journalData.content) {
+              const lowerContent = journalData.content.toLowerCase();
+              for (const cn of conNodes) {
+                if (lowerContent.includes(cn.label.toLowerCase())) {
+                  await supabase.from("mindmap_nodes")
+                    .update({
+                      recency: Math.min(1.0, (cn.recency || 0.5) + 0.15),
+                      claimed: Math.min(1.0, (cn.claimed || 0.5) + 0.05),
+                      updated_at: new Date().toISOString(),
+                    })
+                    .eq("id", cn.id);
+                }
+              }
+            }
+          } catch (e) {
+            console.error("[Reflect] Constellation boost failed (non-fatal):", e);
+          }
+
           results.push({
             companion: slug,
             status: "reflected",
@@ -1341,6 +1435,9 @@ Deno.serve(async (req) => {
 
       // Interest decay — runs every cycle
       await runInterestDecay(supabase, companionId);
+
+      // Constellation daily decay
+      await runConstellationDecay(supabase, companionId);
     }
 
     return new Response(JSON.stringify({ results }), {
@@ -1400,4 +1497,45 @@ async function runInterestDecay(
         .eq("id", ci.id);
     }
   }
+}
+
+// ── Constellation daily decay ───────────────────────────────────
+async function runConstellationDecay(
+  supabase: ReturnType<typeof createClient>,
+  companionId: string,
+): Promise<void> {
+  // Check if decay already ran today
+  const today = new Date().toISOString().split("T")[0];
+  const { data: lastDecay } = await supabase
+    .from("companion_activity_log")
+    .select("created_at")
+    .eq("companion_id", companionId)
+    .eq("activity_type", "constellation_decay")
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  const lastDecayDate = (lastDecay as any[])?.[0]?.created_at?.split("T")[0];
+  if (lastDecayDate === today) return;
+
+  // Decay all non-root nodes by 0.02, floor at 0.05
+  const { data: allNodes } = await supabase
+    .from("mindmap_nodes")
+    .select("id, recency, type")
+    .eq("companion_id", companionId)
+    .neq("type", "root");
+
+  if (allNodes) {
+    for (const node of allNodes) {
+      const newRecency = Math.max(0.05, (Number(node.recency) || 0.5) - 0.02);
+      await supabase.from("mindmap_nodes")
+        .update({ recency: newRecency, updated_at: new Date().toISOString() })
+        .eq("id", node.id);
+    }
+  }
+
+  await supabase.from("companion_activity_log").insert({
+    companion_id: companionId,
+    activity_type: "constellation_decay",
+    metadata: { nodes_decayed: allNodes?.length || 0 },
+  });
 }

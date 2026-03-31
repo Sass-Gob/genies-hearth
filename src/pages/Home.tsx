@@ -5,9 +5,10 @@ interface Props {
   onSelectCompanion: (id: string) => void;
   onOpenSettings: () => void;
   onOpenNook: () => void;
+  onOpenObservatory: () => void;
 }
 
-export default function Home({ onSelectCompanion, onOpenSettings, onOpenNook }: Props) {
+export default function Home({ onSelectCompanion, onOpenSettings, onOpenNook, onOpenObservatory }: Props) {
   return (
     <>
       <style>{`
@@ -125,6 +126,10 @@ export default function Home({ onSelectCompanion, onOpenSettings, onOpenNook }: 
       </button>
       <button className="nook-btn" onClick={onOpenNook} title="The Raven's Nook">
         🪶
+      </button>
+      <button className="nook-btn" onClick={onOpenObservatory} title="The Observatory"
+        style={{ left: '70px' }}>
+        🔭
       </button>
     </>
   );
