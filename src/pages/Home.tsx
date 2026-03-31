@@ -127,7 +127,7 @@ export default function Home({ onSelectCompanion, onOpenSettings, onOpenNook, on
       <button className="nook-btn" onClick={onOpenNook} title="The Raven's Nook">
         🪶
       </button>
-      <button className="nook-btn" onClick={onOpenObservatory} title="The Observatory"
+      <button className="nook-btn" onClick={onOpenObservatory} title="The Schism Room"
         style={{ left: '70px' }}>
         🔭
       </button>

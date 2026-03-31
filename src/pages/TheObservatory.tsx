@@ -374,11 +374,11 @@ export default function TheObservatory({ onBack }: Props) {
       <div className="observatory">
         <div className="obs-header">
           <button className="obs-back" onClick={onBack}>&#8592;</button>
-          <div className="obs-title">The Observatory</div>
+          <div className="obs-title">The Schism Room</div>
         </div>
 
         {loading ? (
-          <div className="obs-loading">Mapping the sky...</div>
+          <div className="obs-loading">Staring into the Schism...</div>
         ) : (
           <svg ref={svgRef} className="obs-svg" viewBox={`0 0 ${dimensions.width} ${dimensions.height}`}>
             <defs>
