@@ -152,7 +152,7 @@ async function callXai(
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ model, messages: apiMessages }),
   });
 
   if (!response.ok) {
