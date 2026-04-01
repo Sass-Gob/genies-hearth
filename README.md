@@ -2,6 +2,8 @@
 
 Where they live.
 
+**Live app:** https://genies-hearth-nu.vercel.app
+
 ## Setup
 
 ### 1. Supabase
