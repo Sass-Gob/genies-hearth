@@ -368,8 +368,8 @@ Deno.serve(async (req) => {
       })
     );
 
-    // Add the new user message
-    chatHistory.push({ role: "user", content: message });
+    // User message is already in the DB (frontend inserts before calling this function)
+    // so it's already in chatHistory from the query above — don't add it again.
 
     // ── Call the appropriate provider ──
     console.log(`Calling ${api_provider} with model ${api_model}, key starts with: ${apiKey.slice(0, 6)}...`);
