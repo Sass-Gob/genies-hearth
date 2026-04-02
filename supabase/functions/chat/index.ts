@@ -152,7 +152,7 @@ async function callXai(
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({ model, messages: apiMessages }),
+    body: JSON.stringify({ model, messages: apiMessages, max_tokens: 5000 }),
   });
 
   if (!response.ok) {
@@ -349,6 +349,15 @@ Deno.serve(async (req) => {
 
     const enrichedSystemPrompt = system_prompt + memoriesContext + autonomousContext;
 
+    // ── DIAGNOSTIC LOGGING (temporary) ──
+    console.log('[DIAG] System prompt length:', system_prompt.length);
+    console.log('[DIAG] Enriched system prompt length:', enrichedSystemPrompt.length);
+    console.log('[DIAG] System prompt first 100 chars:', system_prompt.slice(0, 100));
+    console.log('[DIAG] Model:', api_model);
+    console.log('[DIAG] Provider:', api_provider);
+    console.log('[DIAG] Memories context length:', memoriesContext.length);
+    console.log('[DIAG] Autonomous context length:', autonomousContext.length);
+
     // ── Load recent message history ──
     const { data: recentMessages } = await supabase
       .from("messages")
@@ -366,6 +375,10 @@ Deno.serve(async (req) => {
 
     // User message is already in the DB (frontend inserts before calling this function)
     // so it's already in chatHistory from the query above — don't add it again.
+
+    // ── DIAGNOSTIC: message count ──
+    console.log('[DIAG] Number of messages being sent:', chatHistory.length);
+    console.log('[DIAG] Total estimated chars:', enrichedSystemPrompt.length + chatHistory.reduce((a, m) => a + m.content.length, 0));
 
     // ── Call the appropriate provider ──
     console.log(`Calling ${api_provider} with model ${api_model}, key starts with: ${apiKey.slice(0, 6)}...`);
@@ -402,6 +415,10 @@ Deno.serve(async (req) => {
       default:
         throw new Error(`Unknown provider: ${api_provider}`);
     }
+
+    // ── DIAGNOSTIC: response length ──
+    console.log('[DIAG] Response length:', assistantContent.length);
+    console.log('[DIAG] Response first 200 chars:', assistantContent.slice(0, 200));
 
     // ── Save assistant message ──
     const { data: savedMessage } = await supabase
