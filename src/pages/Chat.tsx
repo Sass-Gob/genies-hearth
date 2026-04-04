@@ -222,10 +222,10 @@ export default function Chat({ companionSlug, onBack }: Props) {
       }));
       setAllConversations(mapped);
 
-      // Try to find today's conversation
-      const today = new Date().toISOString().split('T')[0];
+      // Try to find today's conversation (using local date, not UTC)
+      const today = new Date().toLocaleDateString('en-CA'); // "YYYY-MM-DD" in local tz
       const todayConv = mapped.find(
-        (c) => c.created_at.startsWith(today)
+        (c) => new Date(c.created_at).toLocaleDateString('en-CA') === today
       );
 
       if (todayConv) {
