@@ -532,6 +532,51 @@ Deno.serve(async (req) => {
     console.log('[DIAG] Response length:', assistantContent.length);
     console.log('[DIAG] Response first 200 chars:', assistantContent.slice(0, 200));
 
+    // ── Safety net: strip any raw image API URLs Sullivan might output ──
+    // If the model hallucinates URLs for image generation (it cannot actually
+    // call these APIs), remove them so they don't render as plain text to Genie.
+    // The real image pipeline is below — it decides + calls generate-image.
+    {
+      const before = assistantContent.length;
+
+      // 1. Markdown image syntax:  ![alt](url)
+      assistantContent = assistantContent.replace(
+        /!\[[^\]]*\]\([^)]*\)/g,
+        ""
+      );
+
+      // 2. Any /v1/images URL wrapped in parens:  (https://host/v1/images...)
+      assistantContent = assistantContent.replace(
+        /\(https?:\/\/[^\s)]*\/v1\/images[^)]*\)/gi,
+        ""
+      );
+
+      // 3. Bare /v1/images URL anywhere in the text
+      assistantContent = assistantContent.replace(
+        /https?:\/\/[^\s)]*\/v1\/images\S*/gi,
+        ""
+      );
+
+      // 4. Extra safety: any URL from known image-generation API hosts,
+      //    even if the path shape differs.
+      assistantContent = assistantContent.replace(
+        /https?:\/\/(?:api\.)?(?:grok\.x|x)\.ai\/\S*/gi,
+        ""
+      );
+
+      if (assistantContent.length !== before) {
+        console.log(
+          `[Chat] Stripped raw image API URL(s) from response (${before - assistantContent.length} chars removed)`
+        );
+      }
+      // Collapse empty parens / double spaces / stray whitespace left behind
+      assistantContent = assistantContent
+        .replace(/\(\s*\)/g, "")
+        .replace(/[ \t]{2,}/g, " ")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+    }
+
     // ── Image decision (~10% of messages, or when explicitly asked) ──
     let imageUrl: string | null = null;
     let imagePrompt: string | null = null;
