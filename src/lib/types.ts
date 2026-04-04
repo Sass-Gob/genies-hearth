@@ -38,6 +38,15 @@ export interface Reaction {
   by: 'user' | 'companion';
 }
 
+export interface ChatAttachment {
+  id: string;
+  type: 'image' | 'document';
+  name: string;
+  url: string;
+  mimeType: string;
+  extractedText?: string;
+}
+
 export interface Message {
   id: string;
   conversation_id: string;
@@ -52,6 +61,7 @@ export interface Message {
   image_url?: string | null;
   image_prompt?: string | null;
   image_provider?: string | null;
+  attachments?: ChatAttachment[];
   created_at: string;
 }
 

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { getCompanion } from '../lib/companions';
 import { useTTS } from '../hooks/useTTS';
-import type { Message, Conversation, DbCompanion, Reaction } from '../lib/types';
+import type { Message, Conversation, DbCompanion, Reaction, ChatAttachment } from '../lib/types';
 
 interface Props {
   companionSlug: string;
@@ -132,6 +132,11 @@ export default function Chat({ companionSlug, onBack }: Props) {
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
   const { speak, stop, speakingMsgId } = useTTS();
 
   const companionEmoji: Record<string, string> = { sullivan: '🙄', enzo: '🌙' };
@@ -292,6 +297,7 @@ export default function Chat({ companionSlug, onBack }: Props) {
             image_url: m.image_url || null,
             image_prompt: m.image_prompt || null,
             image_provider: m.image_provider || null,
+            attachments: m.attachments || [],
             created_at: m.created_at,
           }))
         );
@@ -384,15 +390,87 @@ export default function Chat({ companionSlug, onBack }: Props) {
     scrollToBottom();
   }, [messages, isTyping, scrollToBottom]);
 
-  async function sendMessage() {
-    const text = input.trim();
-    if (isTyping) return; // prevent double send
-    if (!text || !conversation || !dbCompanion) {
-      console.log('sendMessage → BAILED: missing', !text ? 'text' : '', !conversation ? 'conversation' : '', !dbCompanion ? 'dbCompanion' : '');
+  // Paste handler for images
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const handlePaste = (e: Event) => {
+      const ce = e as ClipboardEvent;
+      const items = ce.clipboardData?.items;
+      if (!items) return;
+      for (const item of Array.from(items)) {
+        if (item.type.startsWith('image/')) {
+          ce.preventDefault();
+          const file = item.getAsFile();
+          if (file) processFile(file);
+          break;
+        }
+      }
+    };
+    el.addEventListener('paste', handlePaste);
+    return () => el.removeEventListener('paste', handlePaste);
+  });
+
+  async function processFile(file: File | undefined) {
+    if (!file) return;
+    const MAX_SIZE = 10 * 1024 * 1024;
+    if (file.size > MAX_SIZE) {
+      alert('File too large. Maximum size is 10MB.');
       return;
     }
 
+    if (file.type.startsWith('image/')) {
+      const filename = `chat-uploads/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+      const { error } = await supabase.storage.from('media').upload(filename, file, { contentType: file.type });
+      if (error) {
+        console.error('Upload failed:', error);
+        alert('Failed to upload image.');
+        return;
+      }
+      const { data: urlData } = supabase.storage.from('media').getPublicUrl(filename);
+      setAttachments(prev => [...prev, {
+        id: crypto.randomUUID(),
+        type: 'image',
+        name: file.name,
+        url: urlData.publicUrl,
+        mimeType: file.type,
+      }]);
+    } else {
+      let extractedText = '';
+      try {
+        if (file.type === 'application/pdf') {
+          extractedText = `[PDF document: ${file.name}]`;
+        } else {
+          const text = await file.text();
+          extractedText = text.slice(0, 15000);
+        }
+      } catch {
+        extractedText = `[Could not read file: ${file.name}]`;
+      }
+      setAttachments(prev => [...prev, {
+        id: crypto.randomUUID(),
+        type: 'document',
+        name: file.name,
+        url: '',
+        mimeType: file.type,
+        extractedText,
+      }]);
+    }
+    setShowAttachMenu(false);
+  }
+
+  async function sendMessage() {
+    const text = input.trim();
+    if (isTyping) return; // prevent double send
+    if ((!text && attachments.length === 0) || !conversation || !dbCompanion) {
+      console.log('sendMessage → BAILED: missing', (!text && attachments.length === 0) ? 'text/attachments' : '', !conversation ? 'conversation' : '', !dbCompanion ? 'dbCompanion' : '');
+      return;
+    }
+
+    const msgText = text || (attachments.length > 0 ? `[Sent ${attachments.length} file(s)]` : '');
+    const currentAttachments = [...attachments];
     setInput('');
+    setAttachments([]);
     if (inputRef.current) inputRef.current.style.height = 'auto';
     setIsTyping(true);
 
@@ -403,8 +481,9 @@ export default function Chat({ companionSlug, onBack }: Props) {
       conversation_id: conversation.id,
       companion_id: dbCompanion.id,
       role: 'user',
-      content: text,
+      content: msgText,
       reactions: [],
+      attachments: currentAttachments,
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, userMsg]);
@@ -415,7 +494,8 @@ export default function Chat({ companionSlug, onBack }: Props) {
         conversation_id: conversation.id,
         companion_id: dbCompanion.id,
         role: 'user',
-        content: text,
+        content: msgText,
+        attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
       });
 
       // Call edge function
@@ -423,7 +503,8 @@ export default function Chat({ companionSlug, onBack }: Props) {
         body: {
           conversation_id: conversation.id,
           companion_id: dbCompanion.id,
-          message: text,
+          message: msgText,
+          attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
         },
       });
 
@@ -1498,6 +1579,26 @@ export default function Chat({ companionSlug, onBack }: Props) {
                       <VoiceNoteBubble msg={msg} speak={speak} stop={stop} speakingMsgId={speakingMsgId} />
                     ) : (
                       <>
+                        {/* User-uploaded attachments */}
+                        {msg.attachments && msg.attachments.length > 0 && (
+                          <div style={{ marginBottom: msg.content ? '6px' : 0 }}>
+                            {msg.attachments.filter(a => a.type === 'image').map((att) => (
+                              <img
+                                key={att.id}
+                                src={att.url}
+                                alt={att.name}
+                                style={{ maxWidth: '100%', maxHeight: '300px', borderRadius: '8px', objectFit: 'contain', display: 'block', marginBottom: '4px', cursor: 'pointer' }}
+                                loading="lazy"
+                                onClick={() => window.open(att.url, '_blank')}
+                              />
+                            ))}
+                            {msg.attachments.filter(a => a.type === 'document').map((att) => (
+                              <div key={att.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 8px', borderRadius: '8px', background: 'rgba(255,255,255,0.05)', marginBottom: '4px', fontSize: '12px', opacity: 0.7 }}>
+                                📄 {att.name}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         {msg.content}
                         {msg.image_url && (
                           <div style={{ marginTop: '8px' }}>
@@ -1605,6 +1706,33 @@ export default function Chat({ companionSlug, onBack }: Props) {
           <div ref={messagesEndRef} />
         </div>
 
+        {/* Hidden file inputs */}
+        <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={(e) => processFile(e.target.files?.[0])} />
+        <input ref={imageInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => processFile(e.target.files?.[0])} />
+        <input ref={fileInputRef} type="file" accept=".txt,.md,.json,.csv,.pdf,image/*" style={{ display: 'none' }} onChange={(e) => processFile(e.target.files?.[0])} />
+
+        {/* Attachment preview strip */}
+        {attachments.length > 0 && (
+          <div style={{ padding: '8px 16px 0', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            {attachments.map((att) => (
+              <div key={att.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 10px', borderRadius: '12px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', fontSize: '12px' }}>
+                {att.type === 'image' ? (
+                  <img src={att.url} alt="" style={{ width: '24px', height: '24px', borderRadius: '4px', objectFit: 'cover' }} />
+                ) : (
+                  <span>📄</span>
+                )}
+                <span style={{ maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.7 }}>{att.name}</span>
+                <button
+                  onClick={() => setAttachments(prev => prev.filter(a => a.id !== att.id))}
+                  style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', padding: '0 2px', fontSize: '14px' }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Input */}
         <div className="chat-input-area">
           {isRecording ? (
@@ -1614,6 +1742,24 @@ export default function Chat({ companionSlug, onBack }: Props) {
               <button className="rec-cancel" onClick={cancelRecording}>Cancel</button>
             </div>
           ) : (
+            <>
+            <div style={{ position: 'relative' }}>
+              <button
+                className="send-btn"
+                onClick={() => setShowAttachMenu(!showAttachMenu)}
+                title="Attach file"
+                style={{ fontSize: '16px', opacity: 0.5 }}
+              >
+                +
+              </button>
+              {showAttachMenu && (
+                <div style={{ position: 'absolute', bottom: '44px', left: 0, background: 'rgba(20,24,50,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '4px', display: 'flex', flexDirection: 'column', gap: '2px', zIndex: 10, backdropFilter: 'blur(12px)', minWidth: '140px' }}>
+                  <button onClick={() => { cameraInputRef.current?.click(); setShowAttachMenu(false); }} style={{ background: 'none', border: 'none', color: 'inherit', padding: '8px 12px', textAlign: 'left', cursor: 'pointer', borderRadius: '8px', fontSize: '13px' }}>📷 Camera</button>
+                  <button onClick={() => { imageInputRef.current?.click(); setShowAttachMenu(false); }} style={{ background: 'none', border: 'none', color: 'inherit', padding: '8px 12px', textAlign: 'left', cursor: 'pointer', borderRadius: '8px', fontSize: '13px' }}>🖼️ Photo</button>
+                  <button onClick={() => { fileInputRef.current?.click(); setShowAttachMenu(false); }} style={{ background: 'none', border: 'none', color: 'inherit', padding: '8px 12px', textAlign: 'left', cursor: 'pointer', borderRadius: '8px', fontSize: '13px' }}>📄 Document</button>
+                </div>
+              )}
+            </div>
             <textarea
               ref={inputRef}
               className="chat-textarea"
@@ -1627,6 +1773,7 @@ export default function Chat({ companionSlug, onBack }: Props) {
               placeholder={displayCompanion.name}
               rows={1}
             />
+            </>
           )}
           <button
             className={`mic-btn ${isRecording ? 'recording' : ''}`}

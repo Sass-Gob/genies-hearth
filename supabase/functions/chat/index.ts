@@ -138,13 +138,63 @@ async function callXai(
   model: string,
   systemPrompt: string,
   messages: ChatMessage[],
+  currentAttachments?: Array<{ type: string; url: string; name: string; extractedText?: string }>,
 ): Promise<string> {
-  const apiMessages = [
-    { role: "system" as const, content: systemPrompt },
-    ...messages
-      .filter((m) => m.role !== "system")
-      .map((m) => ({ role: m.role, content: m.content })),
+  const filtered = messages.filter((m) => m.role !== "system");
+
+  // Build API messages — last user message may have multi-modal content
+  const apiMessages: Array<{ role: string; content: unknown }> = [
+    { role: "system", content: systemPrompt },
   ];
+
+  for (let i = 0; i < filtered.length; i++) {
+    const m = filtered[i];
+    const isLast = i === filtered.length - 1;
+
+    if (isLast && currentAttachments && currentAttachments.length > 0) {
+      // Build multi-part content for the last user message
+      const parts: Array<{ type: string; text?: string; image_url?: { url: string } }> = [
+        { type: "text", text: m.content },
+      ];
+
+      for (const att of currentAttachments) {
+        if (att.type === "image" && att.url) {
+          // Fetch and convert to base64 data URL for xAI
+          try {
+            const imgResp = await fetch(att.url);
+            if (imgResp.ok) {
+              const buf = await imgResp.arrayBuffer();
+              if (buf.byteLength <= 5_000_000) {
+                const bytes = new Uint8Array(buf);
+                let binary = "";
+                for (let j = 0; j < bytes.length; j++) {
+                  binary += String.fromCharCode(bytes[j]);
+                }
+                const b64 = btoa(binary);
+                const mime = imgResp.headers.get("content-type") || "image/jpeg";
+                parts.push({
+                  type: "image_url",
+                  image_url: { url: `data:${mime};base64,${b64}` },
+                });
+              }
+            }
+          } catch (e) {
+            console.error("[Chat] Failed to fetch image for vision:", e);
+            parts.push({ type: "text", text: `[Image: ${att.name} — could not be loaded]` });
+          }
+        } else if (att.type === "document" && att.extractedText) {
+          parts.push({
+            type: "text",
+            text: `\n[Attached document: ${att.name}]\n---\n${att.extractedText}\n---`,
+          });
+        }
+      }
+
+      apiMessages.push({ role: m.role, content: parts });
+    } else {
+      apiMessages.push({ role: m.role, content: m.content });
+    }
+  }
 
   const response = await fetch("https://api.x.ai/v1/chat/completions", {
     method: "POST",
@@ -209,7 +259,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { conversation_id, companion_id, message } = await req.json();
+    const { conversation_id, companion_id, message, attachments } = await req.json();
 
     if (!conversation_id || !companion_id || !message) {
       return new Response(
@@ -400,6 +450,7 @@ Deno.serve(async (req) => {
           api_model,
           enrichedSystemPrompt,
           chatHistory,
+          attachments,
         );
         break;
 
