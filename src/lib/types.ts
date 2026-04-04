@@ -49,6 +49,9 @@ export interface Message {
   media_type?: 'text' | 'voice';
   audio_data?: string;  // base64 data URL (client-side only, not persisted to DB)
   duration?: number;     // voice note duration in seconds
+  image_url?: string | null;
+  image_prompt?: string | null;
+  image_provider?: string | null;
   created_at: string;
 }
 

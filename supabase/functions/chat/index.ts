@@ -420,6 +420,90 @@ Deno.serve(async (req) => {
     console.log('[DIAG] Response length:', assistantContent.length);
     console.log('[DIAG] Response first 200 chars:', assistantContent.slice(0, 200));
 
+    // ── Image decision (~10% of messages, or when explicitly asked) ──
+    let imageUrl: string | null = null;
+    let imagePrompt: string | null = null;
+    let imageProvider: string | null = null;
+
+    try {
+      // Check user's image provider preference
+      const { data: userSettings } = await supabase
+        .from("user_settings")
+        .select("image_provider")
+        .limit(1)
+        .single();
+
+      const imgProvider = (userSettings as any)?.image_provider || "gemini";
+      const imgApiKey = imgProvider === "dalle" ? apiKeys["openai"] : (apiKeys["google"] || null);
+
+      if (imgApiKey) {
+        const imageDecisionPrompt = `Sullivan just said: "${assistantContent.slice(0, 300)}"
+Genie said: "${message.slice(0, 300)}"
+
+Should Sullivan send an image with this message? Only say YES if:
+- Genie explicitly asked to see something ("show me", "what do you look like", "send me a pic", "draw me")
+- Sullivan is describing something highly visual he found in his wanderings
+- It's a deeply tender moment and a selfie/scene would land emotionally
+
+Most of the time the answer is NO. Images are rare and special — roughly 10% of messages at most.
+
+If YES, write a detailed image generation prompt. Sullivan is 6'4", glowing transparent blue, fireflies under skin. Dark atmospheric style, moody lighting.
+If NO, just say no.
+
+Respond as JSON only: {"send_image": true/false, "image_prompt": "...or null"}`;
+
+        const decisionResponse = await fetch("https://api.x.ai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: api_model,
+            messages: [
+              { role: "system", content: "Respond only as JSON. No markdown, no backticks." },
+              { role: "user", content: imageDecisionPrompt },
+            ],
+            max_tokens: 300,
+            response_format: { type: "json_object" },
+          }),
+        });
+
+        if (decisionResponse.ok) {
+          const decisionData = await decisionResponse.json();
+          const raw = decisionData.choices?.[0]?.message?.content || "{}";
+          let decision: { send_image?: boolean; image_prompt?: string } = {};
+          try {
+            decision = JSON.parse(raw);
+          } catch { /* ignore parse errors */ }
+
+          if (decision.send_image && decision.image_prompt) {
+            console.log("[Chat] Image decision: YES, generating...");
+            imagePrompt = decision.image_prompt;
+            imageProvider = imgProvider;
+
+            // Call generate-image function
+            const { data: imgData, error: imgError } = await supabase.functions.invoke("generate-image", {
+              body: {
+                prompt: imagePrompt,
+                provider: imgProvider,
+                companion_id,
+              },
+            });
+
+            if (!imgError && imgData?.image_url) {
+              imageUrl = imgData.image_url;
+              console.log("[Chat] Image generated:", imageUrl);
+            } else {
+              console.error("[Chat] Image generation failed:", imgError || imgData?.error);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error("[Chat] Image decision failed (non-fatal):", e);
+    }
+
     // ── Save assistant message ──
     const { data: savedMessage } = await supabase
       .from("messages")
@@ -428,6 +512,9 @@ Deno.serve(async (req) => {
         companion_id,
         role: "assistant",
         content: assistantContent,
+        image_url: imageUrl,
+        image_prompt: imagePrompt,
+        image_provider: imageProvider,
       })
       .select()
       .single();

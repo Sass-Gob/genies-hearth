@@ -29,6 +29,7 @@ export default function Settings({ onBack }: Props) {
   const [ttsRate, setTtsRate] = useState(1.0);
   const [ttsPitch, setTtsPitch] = useState(1.0);
   const [autoSpeak, setAutoSpeak] = useState(false);
+  const [imageProvider, setImageProvider] = useState('gemini');
 
   // Load stored keys, companions, user settings, and voices
   useEffect(() => {
@@ -64,6 +65,7 @@ export default function Settings({ onBack }: Props) {
       const s = data as any;
       setDisplayName(s.display_name || '');
       setTimezone(s.timezone || 'Europe/London');
+      setImageProvider(s.image_provider || 'gemini');
     }
   }
 
@@ -696,6 +698,27 @@ export default function Settings({ onBack }: Props) {
                 </div>
               </div>
             ))}
+          </div>
+
+          {/* Image Generation */}
+          <div className="settings-section">
+            <div className="section-title">Image Generation</div>
+            <div className="section-desc">
+              Sullivan can generate images. Choose which provider to use.
+            </div>
+            <div className="key-form">
+              <select
+                className="model-select"
+                value={imageProvider}
+                onChange={(e) => {
+                  setImageProvider(e.target.value);
+                  saveUserSettings('image_provider', e.target.value);
+                }}
+              >
+                <option value="gemini">Gemini Imagen</option>
+                <option value="dalle">DALL-E (OpenAI)</option>
+              </select>
+            </div>
           </div>
 
           {/* Voice Section */}

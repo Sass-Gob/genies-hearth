@@ -289,6 +289,9 @@ export default function Chat({ companionSlug, onBack }: Props) {
             content: m.content,
             reactions: m.reactions || [],
             message_type: m.message_type || null,
+            image_url: m.image_url || null,
+            image_prompt: m.image_prompt || null,
+            image_provider: m.image_provider || null,
             created_at: m.created_at,
           }))
         );
@@ -1494,7 +1497,43 @@ export default function Chat({ companionSlug, onBack }: Props) {
                     {(msg.media_type === 'voice') ? (
                       <VoiceNoteBubble msg={msg} speak={speak} stop={stop} speakingMsgId={speakingMsgId} />
                     ) : (
-                      msg.content
+                      <>
+                        {msg.content}
+                        {msg.image_url && (
+                          <div style={{ marginTop: '8px' }}>
+                            <img
+                              src={msg.image_url}
+                              alt="Sullivan sent an image"
+                              style={{
+                                maxWidth: '100%',
+                                borderRadius: '8px',
+                                maxHeight: '400px',
+                                objectFit: 'contain',
+                              }}
+                              loading="lazy"
+                            />
+                            <div style={{ display: 'flex', gap: '8px', marginTop: '4px', alignItems: 'center' }}>
+                              <button
+                                style={{ fontSize: '11px', opacity: 0.5, background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: 0 }}
+                                onClick={() => {
+                                  const a = document.createElement('a');
+                                  a.href = msg.image_url!;
+                                  a.download = `sullivan-${Date.now()}.png`;
+                                  a.target = '_blank';
+                                  a.click();
+                                }}
+                              >
+                                Save
+                              </button>
+                              {msg.image_provider && (
+                                <span style={{ fontSize: '10px', opacity: 0.3 }}>
+                                  via {msg.image_provider === 'dalle' ? 'DALL-E' : 'Gemini'}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                   {/* Reactions display */}
