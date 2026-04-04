@@ -90,6 +90,38 @@ async function retrieveMemories(
   }
 }
 
+// ── Provider config ──────────────────────────────────────────────────
+
+interface ProviderConfig {
+  baseUrl: string;
+  model: string;
+  keyProvider: string;
+  supportsVision: boolean;
+  extraParams?: Record<string, unknown>;
+}
+
+const CHAT_PROVIDERS: Record<string, ProviderConfig> = {
+  xai: {
+    baseUrl: "https://api.x.ai/v1/chat/completions",
+    model: "grok-4-1-fast",
+    keyProvider: "xai",
+    supportsVision: true,
+  },
+  kimi: {
+    baseUrl: "https://api.moonshot.ai/v1/chat/completions",
+    model: "kimi-k2.5",
+    keyProvider: "kimi",
+    supportsVision: true,
+    extraParams: { thinking: { type: "disabled" } },
+  },
+  gemini: {
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    model: "gemini-2.5-flash",
+    keyProvider: "google",
+    supportsVision: true,
+  },
+};
+
 // ── Provider API callers ────────────────────────────────────────────
 
 interface ChatMessage {
@@ -133,12 +165,15 @@ async function callAnthropic(
   return data.content?.[0]?.type === "text" ? data.content[0].text : "";
 }
 
-async function callXai(
+async function callOpenAICompatible(
+  baseUrl: string,
   apiKey: string,
   model: string,
   systemPrompt: string,
   messages: ChatMessage[],
   currentAttachments?: Array<{ type: string; url: string; name: string; extractedText?: string }>,
+  supportsVision?: boolean,
+  extraParams?: Record<string, unknown>,
 ): Promise<string> {
   const filtered = messages.filter((m) => m.role !== "system");
 
@@ -152,14 +187,16 @@ async function callXai(
     const isLast = i === filtered.length - 1;
 
     if (isLast && currentAttachments && currentAttachments.length > 0) {
-      // Build multi-part content for the last user message
       const parts: Array<{ type: string; text?: string; image_url?: { url: string } }> = [
         { type: "text", text: m.content },
       ];
 
       for (const att of currentAttachments) {
         if (att.type === "image" && att.url) {
-          // Fetch and convert to base64 data URL for xAI
+          if (!supportsVision) {
+            parts.push({ type: "text", text: `[Genie sent an image: ${att.name} — switch to a vision-capable model to see it]` });
+            continue;
+          }
           try {
             const imgResp = await fetch(att.url);
             if (imgResp.ok) {
@@ -196,23 +233,39 @@ async function callXai(
     }
   }
 
-  const response = await fetch("https://api.x.ai/v1/chat/completions", {
+  const body: Record<string, unknown> = { model, messages: apiMessages, max_tokens: 5000 };
+  if (extraParams) Object.assign(body, extraParams);
+
+  const response = await fetch(baseUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({ model, messages: apiMessages, max_tokens: 5000 }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
     const err = await response.text();
-    console.error("xAI API error:", response.status, err);
-    throw new Error(`xAI API error: ${response.status} — ${err.slice(0, 200)}`);
+    console.error(`[Chat] API error (${baseUrl}):`, response.status, err);
+    throw new Error(`API error: ${response.status} — ${err.slice(0, 200)}`);
   }
 
   const data = await response.json();
   return data.choices?.[0]?.message?.content || "";
+}
+
+// Keep callXai as a convenience wrapper
+async function callXai(
+  apiKey: string,
+  model: string,
+  systemPrompt: string,
+  messages: ChatMessage[],
+  currentAttachments?: Array<{ type: string; url: string; name: string; extractedText?: string }>,
+): Promise<string> {
+  return callOpenAICompatible(
+    "https://api.x.ai/v1/chat/completions", apiKey, model, systemPrompt, messages, currentAttachments, true,
+  );
 }
 
 async function callGoogle(
@@ -259,7 +312,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { conversation_id, companion_id, message, attachments } = await req.json();
+    const { conversation_id, companion_id, message, attachments, chat_provider } = await req.json();
 
     if (!conversation_id || !companion_id || !message) {
       return new Response(
@@ -323,6 +376,7 @@ Deno.serve(async (req) => {
       anthropic: "ANTHROPIC_API_KEY",
       xai: "XAI_API_KEY",
       google: "GOOGLE_API_KEY",
+      kimi: "KIMI_API_KEY",
     };
     for (const [provider, envVar] of Object.entries(envVarMap)) {
       if (!apiKeys[provider]) {
@@ -430,41 +484,47 @@ Deno.serve(async (req) => {
     console.log('[DIAG] Number of messages being sent:', chatHistory.length);
     console.log('[DIAG] Total estimated chars:', enrichedSystemPrompt.length + chatHistory.reduce((a, m) => a + m.content.length, 0));
 
+    // ── Determine chat provider (user override or companion default) ──
+    const selectedChatProvider = chat_provider && CHAT_PROVIDERS[chat_provider] ? chat_provider : api_provider;
+    const providerConfig = CHAT_PROVIDERS[selectedChatProvider] || null;
+
     // ── Call the appropriate provider ──
-    console.log(`Calling ${api_provider} with model ${api_model}, key starts with: ${apiKey.slice(0, 6)}...`);
     let assistantContent: string;
+    let usedProvider: string;
 
-    switch (api_provider) {
-      case "anthropic":
-        assistantContent = await callAnthropic(
-          apiKey,
-          api_model,
-          enrichedSystemPrompt,
-          chatHistory
+    if (providerConfig) {
+      // Use unified OpenAI-compatible caller for xai/kimi/gemini
+      const providerKey = apiKeys[providerConfig.keyProvider] || apiKey;
+      if (!providerKey) {
+        return new Response(
+          JSON.stringify({
+            error: "missing_key",
+            display_message: `*No API key for ${selectedChatProvider}. Add it in Settings.*`,
+          }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
-        break;
-
-      case "xai":
-        assistantContent = await callXai(
-          apiKey,
-          api_model,
-          enrichedSystemPrompt,
-          chatHistory,
-          attachments,
-        );
-        break;
-
-      case "google":
-        assistantContent = await callGoogle(
-          apiKey,
-          api_model,
-          enrichedSystemPrompt,
-          chatHistory
-        );
-        break;
-
-      default:
-        throw new Error(`Unknown provider: ${api_provider}`);
+      }
+      console.log(`Calling ${selectedChatProvider} (${providerConfig.model}) via ${providerConfig.baseUrl}`);
+      assistantContent = await callOpenAICompatible(
+        providerConfig.baseUrl,
+        providerKey,
+        providerConfig.model,
+        enrichedSystemPrompt,
+        chatHistory,
+        attachments,
+        providerConfig.supportsVision,
+        providerConfig.extraParams,
+      );
+      usedProvider = selectedChatProvider;
+    } else if (api_provider === "anthropic") {
+      console.log(`Calling anthropic with model ${api_model}`);
+      assistantContent = await callAnthropic(apiKey, api_model, enrichedSystemPrompt, chatHistory);
+      usedProvider = "anthropic";
+    } else {
+      // Fallback: try as xAI
+      console.log(`Calling fallback xai with model ${api_model}`);
+      assistantContent = await callXai(apiKey, api_model, enrichedSystemPrompt, chatHistory, attachments);
+      usedProvider = "xai";
     }
 
     // ── DIAGNOSTIC: response length ──
@@ -566,6 +626,7 @@ Respond as JSON only: {"send_image": true/false, "image_prompt": "...or null"}`;
         image_url: imageUrl,
         image_prompt: imagePrompt,
         image_provider: imageProvider,
+        chat_provider: usedProvider,
       })
       .select()
       .single();

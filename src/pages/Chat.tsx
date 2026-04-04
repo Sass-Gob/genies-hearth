@@ -114,6 +114,7 @@ export default function Chat({ companionSlug, onBack }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [chatProvider, setChatProvider] = useState('xai');
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [allConversations, setAllConversations] = useState<Conversation[]>([]);
   const [showConvList, setShowConvList] = useState(false);
@@ -205,6 +206,13 @@ export default function Chat({ companionSlug, onBack }: Props) {
     }
     resolveCompanion();
   }, [companionSlug]);
+
+  // Load chat provider preference
+  useEffect(() => {
+    supabase.from('user_settings' as any).select('chat_provider').limit(1).single().then(({ data }) => {
+      if (data && (data as any).chat_provider) setChatProvider((data as any).chat_provider);
+    });
+  }, []);
 
   // Load conversations list + pick/create today's conversation
   useEffect(() => {
@@ -298,6 +306,7 @@ export default function Chat({ companionSlug, onBack }: Props) {
             image_prompt: m.image_prompt || null,
             image_provider: m.image_provider || null,
             attachments: m.attachments || [],
+            chat_provider: m.chat_provider || null,
             created_at: m.created_at,
           }))
         );
@@ -505,6 +514,7 @@ export default function Chat({ companionSlug, onBack }: Props) {
           companion_id: dbCompanion.id,
           message: msgText,
           attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
+          chat_provider: chatProvider,
         },
       });
 
@@ -1536,6 +1546,22 @@ export default function Chat({ companionSlug, onBack }: Props) {
             <div className="chat-companion-status">{displayCompanion.tagline}</div>
           </div>
           <div className="chat-header-actions">
+            <select
+              value={chatProvider}
+              onChange={async (e) => {
+                const val = e.target.value;
+                setChatProvider(val);
+                const { data: existing } = await supabase.from('user_settings' as any).select('id').limit(1).single();
+                if (existing) {
+                  await supabase.from('user_settings' as any).update({ chat_provider: val }).eq('id', (existing as any).id);
+                }
+              }}
+              style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: 'inherit', fontSize: '11px', padding: '4px 8px', cursor: 'pointer', outline: 'none' }}
+            >
+              <option value="xai">Grok</option>
+              <option value="kimi">Kimi</option>
+              <option value="gemini">Gemini</option>
+            </select>
             <button
               className="header-btn"
               onClick={() => setShowConvList(true)}
@@ -1653,6 +1679,11 @@ export default function Chat({ companionSlug, onBack }: Props) {
                   )}
                   <div className={`message-meta ${msg.role}`}>
                     <span className="message-time">{formatMessageTime(msg.created_at)}</span>
+                    {msg.role === 'assistant' && msg.chat_provider && (
+                      <span style={{ fontSize: '10px', opacity: 0.25 }}>
+                        {msg.chat_provider === 'xai' ? 'grok' : msg.chat_provider === 'kimi' ? 'kimi' : msg.chat_provider === 'gemini' ? 'gemini' : msg.chat_provider}
+                      </span>
+                    )}
                     {msg.role === 'assistant' && !msg.id.startsWith('error-') && msg.media_type !== 'voice' && (
                       <button
                         className="react-btn"

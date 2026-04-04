@@ -62,6 +62,7 @@ export interface Message {
   image_prompt?: string | null;
   image_provider?: string | null;
   attachments?: ChatAttachment[];
+  chat_provider?: string | null;
   created_at: string;
 }
 
