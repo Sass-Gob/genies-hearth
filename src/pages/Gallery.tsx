@@ -100,6 +100,7 @@ export default function Gallery({ onBack }: Props) {
           align-items: center;
           gap: 12px;
           padding: 16px 20px;
+          padding-top: 52px;
           border-bottom: 1px solid var(--border-subtle);
           flex-shrink: 0;
         }
