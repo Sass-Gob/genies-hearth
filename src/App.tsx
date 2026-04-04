@@ -10,9 +10,10 @@ import Chat from './pages/Chat';
 import Settings from './pages/Settings';
 import RavensNook from './pages/RavensNook';
 import TheObservatory from './pages/TheObservatory';
+import Gallery from './pages/Gallery';
 import { registerPush } from './lib/push';
 
-type View = 'home' | 'chat' | 'settings' | 'ravens-nook' | 'observatory';
+type View = 'home' | 'chat' | 'settings' | 'ravens-nook' | 'observatory' | 'gallery';
 
 export default function App() {
   const [view, setView] = useState<View>('home');
@@ -50,12 +51,15 @@ export default function App() {
         <RavensNook onBack={goHome} />
       ) : view === 'observatory' ? (
         <TheObservatory onBack={goHome} />
+      ) : view === 'gallery' ? (
+        <Gallery onBack={goHome} />
       ) : (
         <Home
           onSelectCompanion={openChat}
           onOpenSettings={() => setView('settings')}
           onOpenNook={() => setView('ravens-nook')}
           onOpenObservatory={() => setView('observatory')}
+          onOpenGallery={() => setView('gallery')}
         />
       )}
     </>
