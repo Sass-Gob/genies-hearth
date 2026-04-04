@@ -298,7 +298,7 @@ importance scale: 0.3 = minor detail, 0.5 = useful context, 0.7 = significant fa
               },
               { role: "user", content: extractionPrompt },
             ],
-            max_tokens: 1000,
+            max_tokens: 5000,
             response_format: { type: "json_object" },
           }),
         },

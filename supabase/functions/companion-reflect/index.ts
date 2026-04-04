@@ -109,6 +109,7 @@ async function generateExplorationEntry(
         model: "grok-4-1-fast",
         tools: [{ type: "web_search" }],
         input: searchQuery,
+        max_output_tokens: 5000,
       }),
     });
 
@@ -168,7 +169,7 @@ Respond ONLY as JSON:
     body: JSON.stringify({
       model: "grok-4-1-fast",
       messages: [{ role: "user", content: writePrompt }],
-      max_tokens: 1000,
+      max_tokens: 5000,
       response_format: { type: "json_object" },
     }),
   });
@@ -237,7 +238,7 @@ Respond ONLY as JSON:
     body: JSON.stringify({
       model: "grok-4-1-fast",
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 1000,
+      max_tokens: 5000,
       response_format: { type: "json_object" },
     }),
   });
@@ -304,7 +305,7 @@ Respond ONLY as JSON:
     body: JSON.stringify({
       model: "grok-4-1-fast",
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 1000,
+      max_tokens: 5000,
       response_format: { type: "json_object" },
     }),
   });
@@ -365,7 +366,7 @@ Respond ONLY as JSON:
     body: JSON.stringify({
       model: "grok-4-1-fast",
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 1000,
+      max_tokens: 5000,
       response_format: { type: "json_object" },
     }),
   });
@@ -650,7 +651,7 @@ Respond ONLY as JSON:
         },
         { role: "user", content: dreamPrompt },
       ],
-      max_tokens: 800,
+      max_tokens: 5000,
       response_format: { type: "json_object" },
     }),
   });
@@ -847,7 +848,7 @@ Respond ONLY as JSON:
     body: JSON.stringify({
       model: "grok-4-1-fast",
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 300,
+      max_tokens: 5000,
       response_format: { type: "json_object" },
     }),
   });
