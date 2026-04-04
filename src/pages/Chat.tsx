@@ -1744,11 +1744,44 @@ export default function Chat({ companionSlug, onBack }: Props) {
 
         {/* Attachment preview strip */}
         {attachments.length > 0 && (
-          <div style={{ padding: '8px 16px 0', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <div
+            style={{
+              position: 'relative',
+              padding: '8px 16px 0',
+              display: 'flex',
+              gap: '8px',
+              flexWrap: 'wrap',
+              flexShrink: 0,
+              background: 'rgba(10, 14, 39, 0.8)',
+              backdropFilter: 'blur(12px)',
+              WebkitUserSelect: 'none',
+              userSelect: 'none',
+              WebkitTouchCallout: 'none',
+            }}
+            onDragStart={(e) => e.preventDefault()}
+          >
             {attachments.map((att) => (
-              <div key={att.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 10px', borderRadius: '12px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', fontSize: '12px' }}>
+              <div
+                key={att.id}
+                draggable={false}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 10px', borderRadius: '12px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', fontSize: '12px' }}
+              >
                 {att.type === 'image' ? (
-                  <img src={att.url} alt="" style={{ width: '24px', height: '24px', borderRadius: '4px', objectFit: 'cover' }} />
+                  <img
+                    src={att.url}
+                    alt=""
+                    draggable={false}
+                    onDragStart={(e) => e.preventDefault()}
+                    style={{
+                      width: '24px',
+                      height: '24px',
+                      borderRadius: '4px',
+                      objectFit: 'cover',
+                      pointerEvents: 'none',
+                      WebkitUserDrag: 'none' as any,
+                      WebkitTouchCallout: 'none',
+                    }}
+                  />
                 ) : (
                   <span>📄</span>
                 )}
