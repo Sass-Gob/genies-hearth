@@ -1778,8 +1778,8 @@ export default function Chat({ companionSlug, onBack }: Props) {
                       borderRadius: '4px',
                       objectFit: 'cover',
                       pointerEvents: 'none',
-                      WebkitUserDrag: 'none' as any,
                       WebkitTouchCallout: 'none',
+                      ...({ WebkitUserDrag: 'none' } as React.CSSProperties),
                     }}
                   />
                 ) : (
