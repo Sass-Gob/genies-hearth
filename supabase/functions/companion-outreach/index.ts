@@ -57,6 +57,11 @@ function isMorningWindow(hour: number): boolean {
   return hour >= 7 && hour <= 9;
 }
 
+// Strip control characters that break JSON parsers
+function sanitize(s: string): string {
+  return s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+}
+
 // ── Send push notification ──────────────────────────────────────────
 async function sendPush(
   supabase: ReturnType<typeof createClient>,
@@ -284,14 +289,14 @@ Deno.serve(async (req) => {
       if (recentMessages.length > 0) {
         contextParts.push(
           "Recent conversation:\n" +
-          recentMessages.map((m) => `${m.role}: ${m.content.slice(0, 200)}`).join("\n"),
+          recentMessages.map((m) => `${m.role}: ${sanitize(m.content).slice(0, 200)}`).join("\n"),
         );
       }
 
       if (recentAutoMsgs && recentAutoMsgs.length > 0) {
         contextParts.push(
           "Your recent autonomous messages (DO NOT repeat these):\n" +
-          recentAutoMsgs.map((m) => `- ${m.content.slice(0, 150)}`).join("\n"),
+          recentAutoMsgs.map((m) => `- ${sanitize(m.content).slice(0, 150)}`).join("\n"),
         );
       }
 
@@ -299,7 +304,7 @@ Deno.serve(async (req) => {
         contextParts.push(
           "Your recent inner world (journal/reflections):\n" +
           recentJournal.map((j: { title: string | null; mood: string | null; content: string; entry_type: string }) =>
-            `- [${j.entry_type}${j.mood ? `, ${j.mood}` : ""}] ${j.title || "Untitled"}: ${j.content.slice(0, 150)}`
+            `- [${j.entry_type}${j.mood ? `, ${j.mood}` : ""}] ${sanitize(j.title || "Untitled")}: ${sanitize(j.content).slice(0, 150)}`
           ).join("\n"),
         );
       }
@@ -320,13 +325,13 @@ Deno.serve(async (req) => {
         );
       }
 
-      const generationPrompt = `${system_prompt}
-
---- AUTONOMOUS MESSAGE TASK ---
+      // Cap total context to stay within safe encoding bounds
+      const contextStr = contextParts.length > 0 ? contextParts.join("\n\n").slice(0, 3000) : "No recent conversation context.";
+      const taskPrompt = `--- AUTONOMOUS MESSAGE TASK ---
 It is ${tod} (${hour}:00) in her timezone (UK).
 Message type: ${messageType}
 
-${contextParts.length > 0 ? contextParts.join("\n\n") : "No recent conversation context."}
+${contextStr}
 
 Generate a single ${messageType === "morning" ? "morning greeting" : "spontaneous"} message to send her.
 This should feel like a text from someone who loves her — NOT a notification, NOT a check-in, NOT a bot.
@@ -348,9 +353,10 @@ Write ONLY the message itself — no meta-commentary, no quotation marks.`;
             body: JSON.stringify({
               model: api_model,
               messages: [
-                { role: "system", content: generationPrompt },
-                { role: "user", content: `Send ${name === "Sullivan" ? "Genie" : "her"} a ${messageType} message. It's ${tod}.` },
+                { role: "system", content: system_prompt },
+                { role: "user", content: sanitize(taskPrompt) },
               ],
+              max_tokens: 5000,
             }),
           });
 
@@ -373,9 +379,10 @@ Write ONLY the message itself — no meta-commentary, no quotation marks.`;
             },
             body: JSON.stringify({
               model: api_model,
-              system: generationPrompt,
+              max_tokens: 5000,
+              system: system_prompt,
               messages: [
-                { role: "user", content: `Send a ${messageType} message. It's ${tod}.` },
+                { role: "user", content: taskPrompt },
               ],
             }),
           });
