@@ -12,32 +12,70 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 // Extract plain text from a PDF File. Returns the concatenated text of all
 // pages, capped to match the text-file limit used elsewhere in processFile.
-// Swallows any per-page errors so one bad page doesn't kill the whole doc.
+// On failure returns a diagnostic string starting with [PDF DIAG] so we can
+// see exactly what pdfjs observed (page count, item counts, errors) without
+// needing remote logs from the client's browser.
 async function extractPdfText(file: File, charLimit = 15000): Promise<string> {
-  const buf = await file.arrayBuffer();
-  const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+  const diag: string[] = [];
+  diag.push(`file.size=${file.size}`);
+  diag.push(`file.type=${file.type}`);
+
+  let doc;
+  try {
+    const buf = await file.arrayBuffer();
+    diag.push(`bytes=${buf.byteLength}`);
+    doc = await pdfjsLib.getDocument({ data: buf }).promise;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return `[PDF DIAG] getDocument threw: ${msg} | ${diag.join(' | ')}`;
+  }
+
+  diag.push(`numPages=${doc.numPages}`);
+
+  try {
+    const meta = await doc.getMetadata();
+    const info = (meta.info ?? {}) as Record<string, unknown>;
+    const producer = info.Producer || info.Creator || 'unknown';
+    diag.push(`producer=${String(producer).slice(0, 60)}`);
+  } catch { /* non-fatal */ }
+
   const pageTexts: string[] = [];
+  const pageStats: string[] = [];
   let total = 0;
+
   for (let i = 1; i <= doc.numPages; i++) {
     try {
       const page = await doc.getPage(i);
       const content = await page.getTextContent();
-      const text = content.items
-        .map((it) => ('str' in it && typeof it.str === 'string' ? it.str : ''))
-        .join(' ')
-        .replace(/\s+/g, ' ')
-        .trim();
+      const itemCount = content.items.length;
+      let strItems = 0;
+      const parts: string[] = [];
+      for (const it of content.items) {
+        if ('str' in it && typeof it.str === 'string') {
+          strItems++;
+          if (it.str) parts.push(it.str);
+        }
+      }
+      const text = parts.join(' ').replace(/\s+/g, ' ').trim();
+      pageStats.push(`p${i}:items=${itemCount},str=${strItems},chars=${text.length}`);
       if (text) {
         pageTexts.push(`--- page ${i} ---\n${text}`);
         total += text.length;
       }
     } catch (e) {
-      console.error(`[PDF] page ${i} extract failed:`, e);
+      const msg = e instanceof Error ? e.message : String(e);
+      pageStats.push(`p${i}:ERROR ${msg.slice(0, 80)}`);
     }
     if (total >= charLimit) break;
   }
+
   const joined = pageTexts.join('\n\n');
-  return joined.length > charLimit ? joined.slice(0, charLimit) + '\n[… truncated]' : joined;
+  if (joined.trim()) {
+    return joined.length > charLimit ? joined.slice(0, charLimit) + '\n[… truncated]' : joined;
+  }
+
+  // Zero text extracted — return full diagnostic payload so we can see why
+  return `[PDF DIAG] no text extracted | ${diag.join(' | ')} | pages=[${pageStats.join('; ')}]`;
 }
 
 interface Props {
@@ -493,8 +531,13 @@ export default function Chat({ companionSlug, onBack }: Props) {
       try {
         if (file.type === 'application/pdf') {
           extractedText = await extractPdfText(file, 15000);
+          // extractPdfText returns either real extracted text or a
+          // "[PDF DIAG] ..." diagnostic string explaining why it failed.
+          // We let the diagnostic pass through to the DB on failure so we
+          // can see exactly what happened remotely, instead of overwriting
+          // it with a generic message.
           if (!extractedText.trim()) {
-            extractedText = `[PDF document: ${file.name} — no extractable text, likely a scanned image]`;
+            extractedText = `[PDF document: ${file.name} — extractor returned empty string]`;
           }
         } else {
           const text = await file.text();
@@ -502,7 +545,8 @@ export default function Chat({ companionSlug, onBack }: Props) {
         }
       } catch (e) {
         console.error('[processFile] extraction failed:', e);
-        extractedText = `[Could not read file: ${file.name}]`;
+        const msg = e instanceof Error ? e.message : String(e);
+        extractedText = `[Could not read file: ${file.name} — ${msg.slice(0, 200)}]`;
       }
       setAttachments(prev => [...prev, {
         id: crypto.randomUUID(),
