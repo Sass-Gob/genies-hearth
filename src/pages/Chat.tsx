@@ -331,7 +331,33 @@ export default function Chat({ companionSlug, onBack }: Props) {
             // Already have this exact ID
             if (prev.some((msg) => msg.id === m.id)) return prev;
 
-            // For user messages, replace the optimistic temp message
+            // Build a complete Message from the realtime payload — matches
+            // the shape used by loadMessages above, so image_url, attachments,
+            // image_prompt, image_provider, chat_provider, message_type all
+            // survive the insert and reach the renderer. Previous versions of
+            // this handler only copied a subset of fields, which silently
+            // stripped every media field from assistant replies and user
+            // attachments, making images invisible to the user.
+            const incoming = {
+              id: m.id,
+              conversation_id: m.conversation_id,
+              companion_id: m.companion_id,
+              role: m.role,
+              content: m.content,
+              reactions: m.reactions || [],
+              message_type: m.message_type || null,
+              image_url: m.image_url || null,
+              image_prompt: m.image_prompt || null,
+              image_provider: m.image_provider || null,
+              attachments: m.attachments || [],
+              chat_provider: m.chat_provider || null,
+              created_at: m.created_at,
+            };
+
+            // For user messages, replace the optimistic temp message and
+            // preserve the voice-only fields (media_type/audio_data/duration)
+            // that exist only on the client-side temp row and are not in the
+            // DB payload.
             if (m.role === 'user') {
               const tempIdx = prev.findIndex(
                 (msg) => msg.id.startsWith('temp-') && msg.role === 'user' && msg.content === m.content
@@ -339,34 +365,16 @@ export default function Chat({ companionSlug, onBack }: Props) {
               if (tempIdx !== -1) {
                 const updated = [...prev];
                 updated[tempIdx] = {
-                  id: m.id,
-                  conversation_id: m.conversation_id,
-                  companion_id: m.companion_id,
-                  role: m.role,
-                  content: m.content,
-                  reactions: m.reactions || [],
+                  ...incoming,
                   media_type: prev[tempIdx].media_type,
                   audio_data: prev[tempIdx].audio_data,
                   duration: prev[tempIdx].duration,
-                  created_at: m.created_at,
                 };
                 return updated;
               }
             }
 
-            return [
-              ...prev,
-              {
-                id: m.id,
-                conversation_id: m.conversation_id,
-                companion_id: m.companion_id,
-                role: m.role,
-                content: m.content,
-                reactions: m.reactions || [],
-                message_type: m.message_type || null,
-                created_at: m.created_at,
-              },
-            ];
+            return [...prev, incoming];
           });
         }
       )
