@@ -3,6 +3,42 @@ import { supabase } from '../lib/supabase';
 import { getCompanion } from '../lib/companions';
 import { useTTS } from '../hooks/useTTS';
 import type { Message, Conversation, DbCompanion, Reaction, ChatAttachment } from '../lib/types';
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+
+// Configure PDF.js worker once at module load. Vite's ?url suffix rewrites
+// this to a hashed asset URL at build time so it's served from /assets/.
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+
+// Extract plain text from a PDF File. Returns the concatenated text of all
+// pages, capped to match the text-file limit used elsewhere in processFile.
+// Swallows any per-page errors so one bad page doesn't kill the whole doc.
+async function extractPdfText(file: File, charLimit = 15000): Promise<string> {
+  const buf = await file.arrayBuffer();
+  const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+  const pageTexts: string[] = [];
+  let total = 0;
+  for (let i = 1; i <= doc.numPages; i++) {
+    try {
+      const page = await doc.getPage(i);
+      const content = await page.getTextContent();
+      const text = content.items
+        .map((it) => ('str' in it && typeof it.str === 'string' ? it.str : ''))
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (text) {
+        pageTexts.push(`--- page ${i} ---\n${text}`);
+        total += text.length;
+      }
+    } catch (e) {
+      console.error(`[PDF] page ${i} extract failed:`, e);
+    }
+    if (total >= charLimit) break;
+  }
+  const joined = pageTexts.join('\n\n');
+  return joined.length > charLimit ? joined.slice(0, charLimit) + '\n[… truncated]' : joined;
+}
 
 interface Props {
   companionSlug: string;
@@ -456,12 +492,16 @@ export default function Chat({ companionSlug, onBack }: Props) {
       let extractedText = '';
       try {
         if (file.type === 'application/pdf') {
-          extractedText = `[PDF document: ${file.name}]`;
+          extractedText = await extractPdfText(file, 15000);
+          if (!extractedText.trim()) {
+            extractedText = `[PDF document: ${file.name} — no extractable text, likely a scanned image]`;
+          }
         } else {
           const text = await file.text();
           extractedText = text.slice(0, 15000);
         }
-      } catch {
+      } catch (e) {
+        console.error('[processFile] extraction failed:', e);
         extractedText = `[Could not read file: ${file.name}]`;
       }
       setAttachments(prev => [...prev, {
